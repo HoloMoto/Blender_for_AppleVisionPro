@@ -16,6 +16,13 @@ Status
 
 Experimental. Usable for development and testing on device; not a release build.
 
+Demo on Vision Pro
+------------------
+
+Latest on-device behavior (visionOS):
+
+[![Vision Pro demo](https://img.youtube.com/vi/7AkiuEGJ1lk/hqdefault.jpg)](https://youtu.be/7AkiuEGJ1lk)
+
 Recent platform work includes:
 
 - visionOS / iOS / iPadOS build and packaging
