@@ -1577,6 +1577,33 @@ bool GHOST_SystemIOS::presentExportDocumentPicker(const char *local_blend_path,
   return true;
 }
 
+static NSString *ios_exports_directory()
+{
+  NSArray<NSString *> *documents_paths = NSSearchPathForDirectoriesInDomains(
+      NSDocumentDirectory, NSUserDomainMask, YES);
+  NSString *documents = documents_paths.firstObject;
+  if (documents.length == 0) {
+    return nil;
+  }
+
+  NSString *exports = [documents stringByAppendingPathComponent:@"Exports"];
+  NSError *error = nil;
+  if (![[NSFileManager defaultManager] createDirectoryAtPath:exports
+                                 withIntermediateDirectories:YES
+                                                  attributes:nil
+                                                       error:&error])
+  {
+    fprintf(stderr,
+            "[ios] exports directory: failed to create %s (%s)\n",
+            exports.UTF8String,
+            error.localizedDescription.UTF8String ?: "unknown");
+    fflush(stderr);
+    return nil;
+  }
+
+  return exports;
+}
+
 static NSString *ios_export_destination_file_path(NSString *destination,
                                                   NSString *filename,
                                                   NSFileManager *file_manager)
@@ -1595,7 +1622,7 @@ static NSString *ios_export_destination_file_path(NSString *destination,
     return destination;
   }
 
-  if ([destination hasSuffix:@"/"]) {
+  if ([destination hasSuffix:@"/"] || ![file_manager fileExistsAtPath:destination]) {
     return [destination stringByAppendingPathComponent:filename];
   }
 
@@ -1684,9 +1711,7 @@ bool GHOST_SystemIOS::commitExportFile(const char *staged_path,
 
     NSString *dest_file = ios_export_destination_file_path(destination, name, file_manager);
     if (dest_file != nil && [file_manager fileExistsAtPath:dest_file]) {
-      fprintf(stderr, "[ios] export commit: using picker destination %s\n", dest_file.UTF8String);
-      fflush(stderr);
-      return ios_write_final_export_path(r_final_path, final_path_max, dest_file);
+      [file_manager removeItemAtPath:dest_file error:nil];
     }
 
     if (dest_file != nil &&
@@ -1718,6 +1743,74 @@ bool GHOST_SystemIOS::commitExportFile(const char *staged_path,
     fflush(stderr);
     return ios_write_final_export_path(r_final_path, final_path_max, fallback_file);
   }
+}
+
+bool GHOST_SystemIOS::documentsExportFilepath(const char *filename,
+                                              char *r_final_path,
+                                              const size_t final_path_max)
+{
+  if (filename == nullptr || filename[0] == '\0' || r_final_path == nullptr ||
+      final_path_max == 0)
+  {
+    return false;
+  }
+
+  @autoreleasepool {
+    NSString *exports = ios_exports_directory();
+    if (exports.length == 0) {
+      return false;
+    }
+
+    NSString *dest = [exports stringByAppendingPathComponent:[NSString stringWithUTF8String:filename]];
+    fprintf(stderr, "[ios] documents export path: %s\n", dest.UTF8String);
+    fflush(stderr);
+    return ios_write_final_export_path(r_final_path, final_path_max, dest);
+  }
+}
+
+bool GHOST_SystemIOS::saveStagedExportToDocuments(const char *staged_path,
+                                                  const char *filename,
+                                                  char *r_final_path,
+                                                  const size_t final_path_max)
+{
+  @autoreleasepool {
+    NSString *exports = ios_exports_directory();
+    if (exports.length == 0) {
+      return false;
+    }
+
+    fprintf(stderr,
+            "[ios] saveStagedExportToDocuments: %s -> %s/%s\n",
+            staged_path,
+            exports.UTF8String,
+            filename);
+    fflush(stderr);
+    return commitExportFile(
+        staged_path, exports.UTF8String, filename, r_final_path, final_path_max);
+  }
+}
+
+void GHOST_SystemIOS::showNativeAlert(const char *title, const char *message)
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    @autoreleasepool {
+      UIViewController *presenting_vc = ios_top_presenting_view_controller();
+      if (presenting_vc == nil) {
+        return;
+      }
+
+      NSString *title_string = (title != nullptr) ? [NSString stringWithUTF8String:title] : @"";
+      NSString *message_string = (message != nullptr) ? [NSString stringWithUTF8String:message] :
+                                                          @"";
+      UIAlertController *alert = [UIAlertController alertControllerWithTitle:title_string
+                                                                     message:message_string
+                                                              preferredStyle:UIAlertControllerStyleAlert];
+      [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                style:UIAlertActionStyleDefault
+                                              handler:nil]];
+      [presenting_vc presentViewController:alert animated:YES completion:nil];
+    }
+  });
 }
 
 // Note: called from NSWindow subclass

@@ -12,6 +12,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <fmt/format.h>
 
 #include "AS_asset_library.hh"
@@ -69,6 +70,7 @@
 #include "RNA_access.hh"
 
 #include "UI_interface.hh"
+#include "UI_interface_c.hh"
 #include "UI_interface_layout.hh"
 #include "UI_view2d.hh"
 
@@ -94,12 +96,17 @@
 #  include <TargetConditionals.h>
 #  if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
 #    include "BKE_appdir.hh"
+#    include "BKE_report.hh"
 #    include "BLI_fileops.hh"
 #    include "BLI_path_utils.hh"
 #    include "BLO_writefile.hh"
+#    include "ED_fileselect.hh"
 #    ifdef WITH_USD
 #      include "io_usd.hh"
 #    endif
+#    include "RNA_access.hh"
+#    include "RNA_define.hh"
+#    include "BLF_api.hh"
 #  endif
 #endif
 
@@ -2884,6 +2891,63 @@ static bool wm_ios_operator_uses_blend_save_exec(const wmOperator *op)
 static void wm_ios_fileselect_finish_staged_export(bContext *C,
                                                    ListBase *handlers,
                                                    wmEventHandler_Op *handler,
+                                                   const char *path);
+
+static bool wm_ios_export_to_documents_folder(bContext *C,
+                                              ListBase *handlers,
+                                              wmEventHandler_Op *handler);
+
+static void wm_ios_show_export_failure_alert(wmOperator *op, const char *fallback_message)
+{
+  if (op->reports != nullptr) {
+    Report *report = BKE_reports_last_displayable(op->reports);
+    if (report != nullptr && report->message[0] != '\0') {
+      GHOST_IOS_show_native_alert("Export failed", report->message);
+      return;
+    }
+  }
+  GHOST_IOS_show_native_alert("Export failed", fallback_message);
+}
+
+static void wm_ios_prepare_export_operator(bContext *C, wmOperator *op)
+{
+  if (op->type->check != nullptr) {
+    op->type->check(C, op);
+  }
+
+#ifdef WITH_USD
+  if (STREQ(op->type->idname, "WM_OT_usd_export")) {
+    char filepath[FILE_MAX];
+    RNA_string_get(op->ptr, "filepath", filepath);
+    if (filepath[0] == '\0') {
+      ED_fileselect_ensure_default_filepath(C, op, ".usdz");
+    }
+    else if (!BLI_path_extension_check_n(
+                 filepath, ".usd", ".usda", ".usdc", ".usdz", nullptr))
+    {
+      BLI_path_extension_ensure(filepath, FILE_MAX, ".usdz");
+      RNA_string_set(op->ptr, "filepath", filepath);
+    }
+  }
+#endif
+}
+
+static wmWindow *wm_ios_fileselect_root_window(bContext *C, const wmEventHandler_Op *handler)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  if (handler->context.win != nullptr) {
+    return handler->context.win;
+  }
+  wmWindow *win = CTX_wm_window(C);
+  if (win != nullptr) {
+    return win;
+  }
+  return static_cast<wmWindow *>(wm->windows.first);
+}
+
+static void wm_ios_fileselect_finish_staged_export(bContext *C,
+                                                   ListBase *handlers,
+                                                   wmEventHandler_Op *handler,
                                                    const char *path)
 {
   wmWindowManager *wm = CTX_wm_manager(C);
@@ -2986,6 +3050,255 @@ static void wm_ios_file_picker_finished_cb(const char *path, bool cancelled, voi
   MEM_freeN(ctx);
 }
 
+struct wmIOSExportPropsPopup {
+  wmEventHandler_Op *handler;
+};
+
+static void wm_ios_export_props_popup_free(wmIOSExportPropsPopup *data)
+{
+  MEM_freeN(data);
+}
+
+static void wm_ios_export_props_popup_block_cancel(bContext *C, void *userdata)
+{
+  wmIOSExportPropsPopup *data = static_cast<wmIOSExportPropsPopup *>(userdata);
+  WM_event_fileselect_event(CTX_wm_manager(C), data->handler->op, EVT_FILESELECT_CANCEL);
+  wm_ios_export_props_popup_free(data);
+}
+
+static void wm_ios_export_props_confirm_cb(bContext *C, void *arg1, void *arg2)
+{
+  wmIOSExportPropsPopup *data = static_cast<wmIOSExportPropsPopup *>(arg1);
+  uiBlock *block = static_cast<uiBlock *>(arg2);
+  wmEventHandler_Op *handler = data->handler;
+  wmWindowManager *wm = CTX_wm_manager(C);
+  wmWindow *root_win = wm_ios_fileselect_root_window(C, handler);
+
+  UI_popup_menu_retval_set(block, UI_RETURN_OK, true);
+  UI_popup_block_close(C, CTX_wm_window(C), block);
+
+  if (root_win != nullptr) {
+    CTX_wm_window_set(C, root_win);
+    wm_window_make_drawable(wm, root_win);
+  }
+
+  wm_ios_prepare_export_operator(C, handler->op);
+
+  ListBase *handlers = root_win != nullptr ? &root_win->modalhandlers : nullptr;
+  if (handlers == nullptr) {
+    wm_ios_show_export_failure_alert(handler->op, "No window available for export.");
+    wm_ios_export_props_popup_free(data);
+    return;
+  }
+
+  if (!wm_ios_export_to_documents_folder(C, handlers, handler)) {
+    BKE_report(&wm->runtime->reports, RPT_ERROR, "Failed to export file");
+  }
+  WM_ios_force_screen_redraw(C);
+
+  wm_ios_export_props_popup_free(data);
+}
+
+static void wm_ios_export_props_cancel_cb(bContext *C, void *arg1, void *arg2)
+{
+  wmIOSExportPropsPopup *data = static_cast<wmIOSExportPropsPopup *>(arg1);
+  uiBlock *block = static_cast<uiBlock *>(arg2);
+  UI_popup_block_close(C, CTX_wm_window(C), block);
+  WM_event_fileselect_event(CTX_wm_manager(C), data->handler->op, EVT_FILESELECT_CANCEL);
+  wm_ios_export_props_popup_free(data);
+}
+
+static uiBlock *wm_ios_export_props_popup_create(bContext *C, ARegion *region, void *user_data)
+{
+  wmIOSExportPropsPopup *data = static_cast<wmIOSExportPropsPopup *>(user_data);
+  wmOperator *op = data->handler->op;
+  const uiStyle *style = UI_style_get_dpi();
+
+  uiBlock *block = UI_block_begin(C, region, __func__, blender::ui::EmbossType::Emboss);
+  UI_block_flag_disable(block, UI_BLOCK_LOOP);
+  UI_block_flag_enable(block, UI_BLOCK_KEEP_OPEN | UI_BLOCK_NUMSELECT);
+  UI_block_theme_style_set(block, UI_BLOCK_THEME_STYLE_POPUP);
+
+  UI_popup_dummy_panel_set(region, block);
+
+  const int cancel_text_width = BLF_width(
+      style->widget.uifont_id, IFACE_("Cancel"), BLF_DRAW_STR_DUMMY_MAX);
+  const int export_text_width = BLF_width(
+      style->widget.uifont_id, IFACE_("Export"), BLF_DRAW_STR_DUMMY_MAX);
+  int dialog_width = int(420 * UI_SCALE_FAC);
+  dialog_width = std::max(dialog_width, 3 * std::max(cancel_text_width, export_text_width));
+
+  uiLayout &layout = blender::ui::block_layout(block,
+                                               blender::ui::LayoutDirection::Vertical,
+                                               blender::ui::LayoutType::Panel,
+                                               0,
+                                               0,
+                                               dialog_width,
+                                               0,
+                                               0,
+                                               style);
+
+  layout.label(WM_operatortype_name(op->type, op->ptr).c_str(), ICON_NONE);
+  layout.separator(0.3f, LayoutSeparatorType::Line);
+
+  /* Keep action buttons above the (long) USD property list so they stay visible on iOS. */
+  UI_block_func_set(block, nullptr, nullptr, nullptr);
+  uiLayout *button_col = &layout.column(false);
+  button_col->scale_y_set(1.2f);
+  uiLayout *button_split = &button_col->split(0.0f, true);
+  uiBlock *button_block = button_split->block();
+  uiBut *cancel_but = uiDefBut(button_block,
+                               ButType::But,
+                               0,
+                               IFACE_("Cancel"),
+                               0,
+                               0,
+                               0,
+                               UI_UNIT_Y,
+                               nullptr,
+                               0,
+                               0,
+                               "");
+  button_split->column(false);
+  uiBut *confirm_but = uiDefBut(button_block,
+                                ButType::But,
+                                0,
+                                IFACE_("Export"),
+                                0,
+                                0,
+                                0,
+                                UI_UNIT_Y,
+                                nullptr,
+                                0,
+                                0,
+                                "");
+  UI_but_func_set(confirm_but, wm_ios_export_props_confirm_cb, data, block);
+  UI_but_func_set(cancel_but, wm_ios_export_props_cancel_cb, data, block);
+  UI_but_flag_enable(confirm_but, UI_BUT_ACTIVE_DEFAULT);
+
+  layout.separator(0.5f);
+
+  if (RNA_struct_find_property(op->ptr, "filepath")) {
+    uiLayout *row = &layout.row(false);
+    row->prop(op->ptr, "filepath", UI_ITEM_NONE, IFACE_("File Path"), ICON_NONE);
+  }
+
+  const char *hide[] = {"filepath", "files", "directory", "filename"};
+  bool hidden_override[ARRAY_SIZE(hide)] = {false};
+  for (int i = 0; i < ARRAY_SIZE(hide); i++) {
+    PropertyRNA *prop = RNA_struct_find_property(op->ptr, hide[i]);
+    if (prop && !(RNA_property_flag(prop) & PROP_HIDDEN)) {
+      RNA_def_property_flag(prop, PROP_HIDDEN);
+      hidden_override[i] = true;
+    }
+  }
+
+  uiTemplateOperatorPropertyButs(
+      C, &layout, op, UI_BUT_LABEL_ALIGN_SPLIT_COLUMN, UI_TEMPLATE_OP_PROPS_SHOW_EMPTY);
+
+  for (int i = 0; i < ARRAY_SIZE(hide); i++) {
+    PropertyRNA *prop = RNA_struct_find_property(op->ptr, hide[i]);
+    if (prop && hidden_override[i]) {
+      RNA_def_property_clear_flag(prop, PROP_HIDDEN);
+    }
+  }
+
+  UI_block_bounds_set_centered(block, 14 * UI_SCALE_FAC);
+  return block;
+}
+
+static void wm_ios_show_export_props_popup(bContext *C, wmEventHandler_Op *handler)
+{
+  wmIOSExportPropsPopup *data = MEM_mallocN<wmIOSExportPropsPopup>(__func__);
+  data->handler = handler;
+  UI_popup_block_ex(C,
+                    wm_ios_export_props_popup_create,
+                    nullptr,
+                    wm_ios_export_props_popup_block_cancel,
+                    data,
+                    nullptr);
+}
+
+static bool wm_ios_export_to_documents_folder(bContext *C,
+                                              ListBase *handlers,
+                                              wmEventHandler_Op *handler)
+{
+  wm_ios_prepare_export_operator(C, handler->op);
+
+  char expected_filename[FILE_MAXFILE] = "Untitled.usdz";
+  if (RNA_struct_find_property(handler->op->ptr, "filepath")) {
+    char filepath[FILE_MAX];
+    RNA_string_get(handler->op->ptr, "filepath", filepath);
+    if (filepath[0] != '\0') {
+      STRNCPY(expected_filename, BLI_path_basename(filepath));
+    }
+  }
+
+  char final_path[FILE_MAX];
+  if (!GHOST_IOS_documents_export_filepath(
+          expected_filename, final_path, sizeof(final_path)))
+  {
+    GHOST_IOS_show_native_alert("Export failed", "Could not access the Exports folder.");
+    return false;
+  }
+
+#ifdef WITH_USD
+  if (STREQ(handler->op->type->idname, "WM_OT_usd_export")) {
+    fprintf(stderr, "[ios] USD export directly to %s\n", final_path);
+    fflush(stderr);
+
+    if (!ED_usd_export_operator_to_path(C, handler->op, final_path)) {
+      wm_ios_show_export_failure_alert(handler->op, "USD export failed.");
+      return false;
+    }
+
+    if (!BLI_exists(final_path)) {
+      wm_ios_show_export_failure_alert(
+          handler->op, "USD export finished but the output file was not created.");
+      return false;
+    }
+
+    wm_ios_fileselect_finish_staged_export(C, handlers, handler, final_path);
+
+    char alert_message[256];
+    SNPRINTF(alert_message,
+             "Saved to Files app > Blender > Exports > %s",
+             expected_filename);
+    GHOST_IOS_show_native_alert("Export complete", alert_message);
+    return true;
+  }
+#endif
+
+  char staged_path[FILE_MAX];
+  if (!wm_ios_write_export_temp(C, handler->op, staged_path)) {
+    wm_ios_show_export_failure_alert(
+        handler->op,
+        "Could not create the export file. Check the Info editor for details.");
+    return false;
+  }
+
+  if (!GHOST_IOS_save_staged_export_to_documents(
+          staged_path, expected_filename, final_path, sizeof(final_path)))
+  {
+    wm_ios_show_export_failure_alert(
+        handler->op,
+        "Could not save to the Files app. Check the Info editor for details.");
+    BLI_delete(staged_path, false, false);
+    return false;
+  }
+
+  BLI_delete(staged_path, false, false);
+
+  wm_ios_fileselect_finish_staged_export(C, handlers, handler, final_path);
+
+  char alert_message[256];
+  SNPRINTF(alert_message,
+           "Saved to Files app > Blender > Exports > %s",
+           expected_filename);
+  GHOST_IOS_show_native_alert("Export complete", alert_message);
+  return true;
+}
+
 static bool wm_ios_present_file_picker(bContext *C,
                                        ListBase *handlers,
                                        wmEventHandler_Op *handler,
@@ -3041,9 +3354,16 @@ static eHandlerActionFlag wm_handler_fileselect_do(bContext *C,
 #if defined(WITH_APPLE_CROSSPLATFORM) && defined(__APPLE__) && defined(TARGET_OS_IPHONE) && \
     TARGET_OS_IPHONE
       const bool ios_is_save = wm_ios_fileselect_is_save_action(handler->op);
+      const bool ios_export_with_props = ios_is_save && wm_ios_fileselect_shows_props(handler->op);
       /* Save operators with an in-app properties panel (e.g. USD export) need the file browser
        * UI first; the Files destination picker runs on #EVT_FILESELECT_EXEC. */
       const bool ios_use_picker_first = !ios_is_save || !wm_ios_fileselect_shows_props(handler->op);
+
+      if (!G.background && ios_export_with_props) {
+        wm_ios_show_export_props_popup(C, handler);
+        action = WM_HANDLER_BREAK;
+        break;
+      }
 
       if (!G.background && ios_use_picker_first &&
           wm_ios_present_file_picker(C, handlers, handler, ios_is_save))
@@ -3101,17 +3421,17 @@ static eHandlerActionFlag wm_handler_fileselect_do(bContext *C,
           wm_ios_fileselect_is_save_action(handler->op) &&
           !wm_ios_operator_uses_blend_save_exec(handler->op))
       {
-        if (wm_ios_present_file_picker(C, handlers, handler, true)) {
-          ScrArea *export_area = CTX_wm_area(C);
-          if (export_area != nullptr && export_area->full) {
-            ED_fileselect_params_to_userdef(
-                static_cast<SpaceFile *>(export_area->spacedata.first));
-            ED_screen_full_prevspace(C, export_area);
-          }
+        wmWindow *root_win = wm_ios_fileselect_root_window(C, handler);
+        if (root_win != nullptr) {
+          CTX_wm_window_set(C, root_win);
+          wm_window_make_drawable(wm, root_win);
+        }
+
+        if (wm_ios_export_to_documents_folder(C, handlers, handler)) {
           WM_ios_force_screen_redraw(C);
           return WM_HANDLER_BREAK;
         }
-        BKE_report(&wm->runtime->reports, RPT_ERROR, "Failed to open export destination picker");
+        BKE_report(&wm->runtime->reports, RPT_ERROR, "Failed to export file");
         return WM_HANDLER_BREAK;
       }
 #endif

@@ -95,6 +95,17 @@ extern bool GHOST_IOS_commit_export_file(const char *staged_path,
                                          const char *filename,
                                          char *r_final_path,
                                          const size_t final_path_max);
+/** Copy a staged export into Documents/Exports (visible in the Files app). */
+extern bool GHOST_IOS_save_staged_export_to_documents(const char *staged_path,
+                                                      const char *filename,
+                                                      char *r_final_path,
+                                                      const size_t final_path_max);
+/** Build Documents/Exports/<filename> and ensure the folder exists. */
+extern bool GHOST_IOS_documents_export_filepath(const char *filename,
+                                               char *r_final_path,
+                                               const size_t final_path_max);
+/** Show a native alert (visible without log access). */
+extern void GHOST_IOS_show_native_alert(const char *title, const char *message);
 
 #endif
 

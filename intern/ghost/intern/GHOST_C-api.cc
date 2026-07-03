@@ -144,6 +144,39 @@ extern bool GHOST_IOS_commit_export_file(const char *staged_path,
       staged_path, destination_path, filename, r_final_path, final_path_max);
 }
 
+extern bool GHOST_IOS_save_staged_export_to_documents(const char *staged_path,
+                                                      const char *filename,
+                                                      char *r_final_path,
+                                                      const size_t final_path_max)
+{
+  GHOST_SystemIOS *system = dynamic_cast<GHOST_SystemIOS *>(GHOST_ISystem::getSystem());
+  if (system == nullptr) {
+    return false;
+  }
+  return system->saveStagedExportToDocuments(
+      staged_path, filename, r_final_path, final_path_max);
+}
+
+extern bool GHOST_IOS_documents_export_filepath(const char *filename,
+                                                char *r_final_path,
+                                                const size_t final_path_max)
+{
+  GHOST_SystemIOS *system = dynamic_cast<GHOST_SystemIOS *>(GHOST_ISystem::getSystem());
+  if (system == nullptr) {
+    return false;
+  }
+  return system->documentsExportFilepath(filename, r_final_path, final_path_max);
+}
+
+extern void GHOST_IOS_show_native_alert(const char *title, const char *message)
+{
+  GHOST_SystemIOS *system = dynamic_cast<GHOST_SystemIOS *>(GHOST_ISystem::getSystem());
+  if (system == nullptr) {
+    return;
+  }
+  system->showNativeAlert(title, message);
+}
+
 #endif
 
 GHOST_EventConsumerHandle GHOST_CreateEventConsumer(GHOST_EventCallbackProcPtr eventCallback,

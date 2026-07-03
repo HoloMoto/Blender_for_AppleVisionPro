@@ -261,6 +261,14 @@ class GHOST_SystemIOS : public GHOST_System {
                         const char *filename,
                         char *r_final_path,
                         size_t final_path_max);
+  bool saveStagedExportToDocuments(const char *staged_path,
+                                   const char *filename,
+                                   char *r_final_path,
+                                   size_t final_path_max);
+  bool documentsExportFilepath(const char *filename,
+                               char *r_final_path,
+                               size_t final_path_max);
+  void showNativeAlert(const char *title, const char *message);
 
   /**
    * Handles a window event. Called by GHOST_WindowIOS window delegate
