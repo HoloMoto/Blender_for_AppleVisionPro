@@ -34,14 +34,121 @@ Recent platform work includes:
 Requirements
 ------------
 
-- macOS with Xcode (device builds; simulator libs are not used here)
-- CMake host tools and iOS prebuilt libraries (`lib/ios_arm64`, etc.)
+- **macOS** with **Xcode** (visionOS / iOS SDK; device builds only — simulator libs are not used here)
+- **Apple Developer account** (code signing for physical devices)
+- **CMake** and **Ninja** (or Xcode generator)
+- Prebuilt Blender libraries: `lib/ios_arm64` and `lib/macos_arm64` (see Setup below — **not included in this repo**)
 - See upstream [build documentation](https://developer.blender.org/docs/handbook/building_blender/) for general Blender build concepts
+
+What is (and is not) in this repository
+---------------------------------------
+
+This repo is a **source snapshot** of the Apple-platform port. It does **not** include:
+
+- Prebuilt dependency libraries (`lib/ios_arm64`, `lib/macos_arm64` — roughly 2 GB combined)
+- A built `Blender.app` ready to install
+- Personal code-signing settings (Team ID, bundle identifier)
+
+Cloning alone is **not** enough to run Blender on a device. You must obtain the libraries, configure, build, and deploy from Xcode.
+
+Setup (new Mac or second machine)
+---------------------------------
+
+### 1. Clone this repository
+
+```bash
+git clone -b ios git@github.com:HoloMoto/Blender_for_AppleVisionPro.git blender_fresh
+cd blender_fresh
+```
+
+### 2. Obtain prebuilt libraries (choose one method)
+
+**Option A — `make update` (recommended if versions match upstream)**
+
+From the cloned tree, run Blender's library checkout (requires Git LFS):
+
+```bash
+make update
+```
+
+This should populate `lib/ios_arm64` and `lib/macos_arm64` under the source root.
+
+**Option B — copy from an existing build machine**
+
+Copy these folders from a machine that already builds this port:
+
+- `lib/ios_arm64` (~1 GB)
+- `lib/macos_arm64` (~1 GB)
+
+Place them at `blender_fresh/lib/`. A symlink is fine, for example:
+
+```bash
+ln -s /path/to/lib/ios_arm64 lib/ios_arm64
+ln -s /path/to/lib/macos_arm64 lib/macos_arm64
+```
+
+Library versions must match the Blender source revision in this branch.
+
+### 3. Build macOS host tools (first time only)
+
+iOS cross-builds need host tools (e.g. `datatoc`, `glsl_preprocess`). Build them in a separate directory:
+
+```bash
+mkdir -p ../build_darwin_tools && cd ../build_darwin_tools
+cmake ../blender_fresh -DCMAKE_BUILD_TYPE=Release
+cmake --build . --target datatoc glsl_preprocess -j8
+```
+
+Note the output path, e.g. `../build_darwin_tools/bin` — you will pass it as `BLENDER_IOS_HOST_TOOLS_DIR`.
+
+### 4. Configure the iOS build
+
+```bash
+mkdir -p ../build_ios_fresh && cd ../build_ios_fresh
+cmake ../blender_fresh \
+  -G Xcode \
+  -DAPPLE_TARGET_DEVICE=ios \
+  -DBLENDER_IOS_DEVELOPMENT_TEAM=YOUR_10_CHAR_TEAM_ID \
+  -DBLENDER_IOS_BUNDLE_ID=com.yourdomain.blenderios \
+  -DBLENDER_IOS_HOST_TOOLS_DIR=/absolute/path/to/build_darwin_tools/bin
+```
+
+Replace `YOUR_10_CHAR_TEAM_ID` with your Apple Developer Team ID and choose a unique bundle ID.
+
+### 5. Build and deploy
+
+```bash
+cmake --build . --target blender -j8
+```
+
+Output: `build_ios_fresh/bin/Debug/Blender.app`
+
+- Open the generated Xcode project or deploy the `.app` to a **physical** Vision Pro / iPad / iPhone.
+- Remove any older Blender install on the device before testing a new build.
+- If Xcode **Run** crashes with `PointerUI` / backtrace errors, launch from the home-screen icon instead, or disable **Enable backtrace recording** in the scheme's Run options.
+
+### 6. USD / USDZ export on device
+
+Exported files are written to **Files app → On My iPad / iPhone → Blender → Exports** (no system save picker).
+
+Values you must supply locally
+------------------------------
+
+| Setting | Description |
+|---------|-------------|
+| `BLENDER_IOS_DEVELOPMENT_TEAM` | 10-character Team ID from Apple Developer |
+| `BLENDER_IOS_BUNDLE_ID` | Unique app ID (e.g. `com.example.blenderios`) |
+| `BLENDER_IOS_HOST_TOOLS_DIR` | Path to macOS host tools `bin` directory |
+| `lib/ios_arm64` | Not in Git — `make update` or copy from another Mac |
+| `lib/macos_arm64` | Not in Git — same as above |
+| Xcode | visionOS / iOS SDK installed (device SDK) |
+
+**Do not push** to the official `github.com/blender/blender` repository. This fork is published at [HoloMoto/Blender_for_AppleVisionPro](https://github.com/HoloMoto/Blender_for_AppleVisionPro) only.
 
 Build (overview)
 ----------------
 
-1. Configure an iOS build directory with `APPLE_TARGET_DEVICE=ios` and host tools.
+1. Complete **Setup** above (libraries + host tools + CMake configure).
 2. Build the `blender` target for `iphoneos`.
 3. Deploy `Blender.app` to a physical device from Xcode.
 
