@@ -1676,6 +1676,12 @@ void blo_do_versions_userdef(UserDef *userdef)
     }
   }
 
+#if defined(WITH_APPLE_CROSSPLATFORM)
+  if (userdef->render_display_type == USER_RENDER_DISPLAY_WINDOW) {
+    userdef->render_display_type = USER_RENDER_DISPLAY_SCREEN;
+  }
+#endif
+
   /**
    * Always bump subversion in BKE_blender_version.h when adding versioning
    * code here, and wrap it inside a USER_VERSION_ATLEAST check.

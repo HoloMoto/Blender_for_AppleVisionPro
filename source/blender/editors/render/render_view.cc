@@ -134,11 +134,20 @@ ScrArea *render_view_open(bContext *C, int mx, int my, ReportList *reports)
   SpaceImage *sima;
   bool area_was_image = false;
 
-  if (U.render_display_type == USER_RENDER_DISPLAY_NONE) {
+#if defined(WITH_APPLE_CROSSPLATFORM)
+  /* Single-window platforms cannot spawn a dedicated render window (#WM_window_open). */
+  const char render_display_type = (U.render_display_type == USER_RENDER_DISPLAY_WINDOW) ?
+                                       USER_RENDER_DISPLAY_SCREEN :
+                                       U.render_display_type;
+#else
+  const char render_display_type = U.render_display_type;
+#endif
+
+  if (render_display_type == USER_RENDER_DISPLAY_NONE) {
     return nullptr;
   }
 
-  if (U.render_display_type == USER_RENDER_DISPLAY_WINDOW) {
+  if (render_display_type == USER_RENDER_DISPLAY_WINDOW) {
     int sizex, sizey;
     BKE_render_resolution(&scene->r, false, &sizex, &sizey);
 
@@ -183,12 +192,16 @@ ScrArea *render_view_open(bContext *C, int mx, int my, ReportList *reports)
     }
 
     area = CTX_wm_area(C);
-    if (BLI_listbase_is_single(&area->spacedata) == false) {
+    if (area && area->spacetype != SPACE_IMAGE) {
+      /* #WM_window_open may reuse the primary window without switching to the image editor. */
+      area = nullptr;
+    }
+    else if (area && BLI_listbase_is_single(&area->spacedata) == false) {
       sima = static_cast<SpaceImage *>(area->spacedata.first);
       sima->flag |= SI_PREVSPACE;
     }
   }
-  else if (U.render_display_type == USER_RENDER_DISPLAY_SCREEN) {
+  else if (render_display_type == USER_RENDER_DISPLAY_SCREEN) {
     area = CTX_wm_area(C);
 
     /* If the active screen is already in full-screen mode, skip this and
@@ -247,6 +260,11 @@ ScrArea *render_view_open(bContext *C, int mx, int my, ReportList *reports)
       }
     }
   }
+  if (area == nullptr || area->spacetype != SPACE_IMAGE) {
+    BKE_report(reports, RPT_ERROR, "Failed to open image editor for render result");
+    return nullptr;
+  }
+
   sima = static_cast<SpaceImage *>(area->spacedata.first);
   sima->link_flag |= SPACE_FLAG_TYPE_TEMPORARY;
 
@@ -273,6 +291,10 @@ ScrArea *render_view_open(bContext *C, int mx, int my, ReportList *reports)
     SpaceLink *old_sl = sima->next;
     old_sl->link_flag |= SPACE_FLAG_TYPE_WAS_ACTIVE;
   }
+
+#if defined(WITH_APPLE_CROSSPLATFORM)
+  WM_ios_force_screen_redraw(C);
+#endif
 
   return area;
 }
@@ -305,16 +327,25 @@ static wmOperatorStatus render_view_cancel_exec(bContext *C, wmOperator * /*op*/
     else {
       ED_area_prevspace(C, area);
     }
+#if defined(WITH_APPLE_CROSSPLATFORM)
+    WM_ios_force_screen_redraw(C);
+#endif
 
     return OPERATOR_FINISHED;
   }
   if (sima->flag & SI_FULLWINDOW) {
     sima->flag &= ~SI_FULLWINDOW;
     ED_screen_state_toggle(C, win, area, SCREENMAXIMIZED);
+#if defined(WITH_APPLE_CROSSPLATFORM)
+    WM_ios_force_screen_redraw(C);
+#endif
     return OPERATOR_FINISHED;
   }
   if (WM_window_is_temp_screen(win)) {
     wm_window_close(C, CTX_wm_manager(C), win);
+#if defined(WITH_APPLE_CROSSPLATFORM)
+    WM_ios_force_screen_redraw(C);
+#endif
     return OPERATOR_FINISHED;
   }
 

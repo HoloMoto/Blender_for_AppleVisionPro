@@ -807,6 +807,10 @@ static void render_endjob(void *rjv)
   /* XXX render stability hack */
   G.is_rendering = false;
   WM_main_add_notifier(NC_SCENE | ND_RENDER_RESULT, nullptr);
+#if defined(WITH_APPLE_CROSSPLATFORM)
+  /* Ensure viewport overlays/gizmos are refreshed after returning from render result space. */
+  WM_main_add_notifier(NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+#endif
 
   /* Partial render result will always update display buffer
    * for first render layer only. This is nice because you'll

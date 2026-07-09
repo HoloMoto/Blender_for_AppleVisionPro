@@ -192,7 +192,11 @@ const UserDef U_default = {
     .pie_menu_radius = 100,
     .pie_menu_threshold = 12,
     .factor_display_type = USER_FACTOR_AS_FACTOR,
+#if defined(WITH_APPLE_CROSSPLATFORM)
+    .render_display_type = USER_RENDER_DISPLAY_SCREEN,
+#else
     .render_display_type = USER_RENDER_DISPLAY_WINDOW,
+#endif
     .filebrowser_display_type = USER_TEMP_SPACE_DISPLAY_WINDOW,
     .preferences_display_type = USER_TEMP_SPACE_DISPLAY_WINDOW,
     .viewport_aa = 8,
