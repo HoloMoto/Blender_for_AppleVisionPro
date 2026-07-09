@@ -49,6 +49,8 @@ This repo is a **source snapshot** of the Apple-platform port. It does **not** i
 - A built `Blender.app` ready to install
 - Personal code-signing settings (Team ID, bundle identifier)
 
+The `release/datafiles/*.blend` and `splash.png` files **are** included in this repo (they are normally Git LFS in upstream Blender). If they are missing after clone, see Setup step 3.
+
 Cloning alone is **not** enough to run Blender on a device. You must obtain the libraries, configure, build, and deploy from Xcode.
 
 Setup (new Mac or second machine)
@@ -89,7 +91,39 @@ ln -s /path/to/lib/macos_arm64 lib/macos_arm64
 
 Library versions must match the Blender source revision in this branch.
 
-### 3. Build macOS host tools (first time only)
+### 3. Obtain embedded datafiles (required for `bf_editor_datafiles`)
+
+The iOS build embeds these files via `datatoc` during compile:
+
+- `release/datafiles/startup.blend`
+- `release/datafiles/preview.blend`
+- `release/datafiles/preview_grease_pencil.blend`
+- `release/datafiles/splash.png`
+
+Upstream Blender stores them in **Git LFS**. If Xcode fails with:
+
+`Unable to open input .../release/datafiles/preview.blend`
+
+the files are missing. Fix with one of:
+
+**Option A — copy from a working build machine**
+
+```bash
+# On the machine that already builds successfully:
+scp release/datafiles/{startup.blend,preview.blend,preview_grease_pencil.blend,splash.png} \
+    other-mac:~/blender_fresh/release/datafiles/
+```
+
+**Option B — fetch from a full upstream Blender checkout**
+
+```bash
+# In a separate official blender.git clone with Git LFS installed:
+git lfs pull
+cp /path/to/blender/release/datafiles/{startup.blend,preview.blend,preview_grease_pencil.blend,splash.png} \
+   release/datafiles/
+```
+
+### 4. Build macOS host tools (first time only)
 
 iOS cross-builds need host tools (e.g. `datatoc`, `glsl_preprocess`). Build them in a separate directory:
 
@@ -101,7 +135,7 @@ cmake --build . --target datatoc glsl_preprocess -j8
 
 Note the output path, e.g. `../build_darwin_tools/bin` — you will pass it as `BLENDER_IOS_HOST_TOOLS_DIR`.
 
-### 4. Configure the iOS build
+### 5. Configure the iOS build
 
 ```bash
 mkdir -p ../build_ios_fresh && cd ../build_ios_fresh
@@ -115,7 +149,7 @@ cmake ../blender_fresh \
 
 Replace `YOUR_10_CHAR_TEAM_ID` with your Apple Developer Team ID and choose a unique bundle ID.
 
-### 5. Build and deploy
+### 6. Build and deploy
 
 ```bash
 cmake --build . --target blender -j8
@@ -127,7 +161,7 @@ Output: `build_ios_fresh/bin/Debug/Blender.app`
 - Remove any older Blender install on the device before testing a new build.
 - If Xcode **Run** crashes with `PointerUI` / backtrace errors, launch from the home-screen icon instead, or disable **Enable backtrace recording** in the scheme's Run options.
 
-### 6. USD / USDZ export on device
+### 7. USD / USDZ export on device
 
 Exported files are written to **Files app → On My iPad / iPhone → Blender → Exports** (no system save picker).
 
