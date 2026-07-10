@@ -106,6 +106,10 @@ extern bool GHOST_IOS_documents_export_filepath(const char *filename,
                                                const size_t final_path_max);
 /** Show a native alert (visible without log access). */
 extern void GHOST_IOS_show_native_alert(const char *title, const char *message);
+/** Enter or leave a RealityKit immersive ARView session. */
+extern bool GHOST_IOS_set_immersive_mode_enabled(bool enable);
+/** True while the immersive RealityKit view is presented. */
+extern bool GHOST_IOS_immersive_mode_is_active();
 
 #endif
 

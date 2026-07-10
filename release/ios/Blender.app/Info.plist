@@ -74,6 +74,8 @@
     <true/>
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>Blender uses the camera for Reality Kit immersive AR mode.</string>
     <key>UISupportsDocumentBrowser</key>
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import bpy
+import sys
 from bpy.types import Header, Menu, Panel
 
 from bpy.app.translations import (
@@ -543,6 +544,10 @@ class TOPBAR_MT_window(Menu):
         layout.separator()
 
         layout.operator("wm.window_fullscreen_toggle", icon='FULLSCREEN_ENTER')
+
+        if hasattr(bpy.ops.wm, "ios_immersive_toggle"):
+            layout.separator()
+            layout.operator("wm.ios_immersive_toggle", text="Reality Kit Immersive Mode")
 
         layout.separator()
 

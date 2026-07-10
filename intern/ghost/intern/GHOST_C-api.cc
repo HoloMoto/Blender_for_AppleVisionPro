@@ -177,6 +177,9 @@ extern void GHOST_IOS_show_native_alert(const char *title, const char *message)
   system->showNativeAlert(title, message);
 }
 
+extern bool GHOST_IOS_set_immersive_mode_enabled(const bool enable);
+extern bool GHOST_IOS_immersive_mode_is_active();
+
 #endif
 
 GHOST_EventConsumerHandle GHOST_CreateEventConsumer(GHOST_EventCallbackProcPtr eventCallback,

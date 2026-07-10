@@ -23,6 +23,9 @@
 #ifdef WIN32
 #  include "GHOST_C-api.h"
 #endif
+#if defined(WITH_APPLE_CROSSPLATFORM)
+#  include "GHOST_C-api.h"
+#endif
 
 #include "MEM_guardedalloc.h"
 
@@ -4197,6 +4200,38 @@ static void WM_OT_stereo3d_set(wmOperatorType *ot)
 /** \} */
 
 /* -------------------------------------------------------------------- */
+/** \name iOS Immersive Toggle Operator (RealityKit)
+ * \{ */
+
+#if defined(WITH_APPLE_CROSSPLATFORM)
+static wmOperatorStatus wm_ios_immersive_toggle_exec(bContext *C, wmOperator * /*op*/)
+{
+  const bool enable = !GHOST_IOS_immersive_mode_is_active();
+  if (!GHOST_IOS_set_immersive_mode_enabled(enable)) {
+    GHOST_IOS_show_native_alert(
+        "Reality Kit",
+        "Could not open immersive mode. Make sure the app window is active and try again.");
+    return OPERATOR_CANCELLED;
+  }
+
+  WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+  return OPERATOR_FINISHED;
+}
+
+static void WM_OT_ios_immersive_toggle(wmOperatorType *ot)
+{
+  ot->name = "Toggle Reality Kit Immersive Mode";
+  ot->idname = "WM_OT_ios_immersive_toggle";
+  ot->description = "Toggle between standard 2D mode and Reality Kit immersive mode";
+
+  ot->exec = wm_ios_immersive_toggle_exec;
+  ot->poll = WM_operator_winactive;
+}
+#endif
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
 /** \name Operator Registration & Keymaps
  * \{ */
 
@@ -4243,6 +4278,9 @@ void wm_operatortypes_register()
   WM_operatortype_append(WM_OT_stereo3d_set);
 #if defined(WIN32)
   WM_operatortype_append(WM_OT_console_toggle);
+#endif
+#if defined(WITH_APPLE_CROSSPLATFORM)
+  WM_operatortype_append(WM_OT_ios_immersive_toggle);
 #endif
   WM_operatortype_append(WM_OT_previews_ensure);
   WM_operatortype_append(WM_OT_previews_clear);

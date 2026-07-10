@@ -188,6 +188,7 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
 
         intern/GHOST_SystemIOS.mm
         intern/GHOST_WindowIOS.mm
+        intern/GHOST_IOSImmersive.mm
 
         intern/GHOST_ContextIOS.mm
         intern/GHOST_ContextIOS.hh
