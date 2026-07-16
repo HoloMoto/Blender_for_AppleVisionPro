@@ -420,10 +420,17 @@ endif()
 string(APPEND PLATFORM_CFLAGS " -pipe -funsigned-char -fno-strict-aliasing -ffp-contract=off")
 
 if(WITH_APPLE_CROSSPLATFORM)
-  # Link different frameworks for iOS
-  set(PLATFORM_LINKFLAGS
-    "-fexceptions -framework CoreServices -framework Foundation -framework IOKit -framework UIKit -framework AudioToolbox -framework CoreAudio -framework Metal -framework MetalKit -framework QuartzCore -framework ImageIO -framework GameController -framework CoreGraphics -framework UniformTypeIdentifiers -framework ARKit -framework SceneKit"
-  )
+  if(APPLE_TARGET_DEVICE STREQUAL "visionos")
+    # Vision Pro: RealityKit Immersive Space (no iPad ARKit preview on this path).
+    set(PLATFORM_LINKFLAGS
+      "-fexceptions -framework CoreServices -framework Foundation -framework IOKit -framework UIKit -framework AudioToolbox -framework CoreAudio -framework Metal -framework MetalKit -framework QuartzCore -framework ImageIO -framework GameController -framework CoreGraphics -framework UniformTypeIdentifiers -framework RealityKit -framework SwiftUI"
+    )
+  else()
+    # iPad / iPhone
+    set(PLATFORM_LINKFLAGS
+      "-fexceptions -framework CoreServices -framework Foundation -framework IOKit -framework UIKit -framework AudioToolbox -framework CoreAudio -framework Metal -framework MetalKit -framework QuartzCore -framework ImageIO -framework GameController -framework CoreGraphics -framework UniformTypeIdentifiers -framework ARKit -framework SceneKit"
+    )
+  endif()
   list(APPEND PLATFORM_LINKLIBS "${LIBDIR}/libb2/lib/libb2.a")
 else()
   set(PLATFORM_LINKFLAGS

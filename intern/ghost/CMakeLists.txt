@@ -196,8 +196,8 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
         intern/GHOST_ContextIOS.hh
       )
 
-      # Vision Pro Immersive Space (Swift / RealityKit). Off by default so iPad
-      # builds keep using the ARSCNView fallback without requiring Swift.
+      # Vision Pro Immersive Space (Swift / RealityKit).
+      # Forced ON when APPLE_TARGET_DEVICE=visionos. Keep OFF for ios/ipad builds.
       option(WITH_VISIONOS_IMMERSIVE_SPACE
              "Build Swift RealityKit Immersive Space support for visionOS"
              OFF)

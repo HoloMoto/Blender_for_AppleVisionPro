@@ -4206,8 +4206,22 @@ static void WM_OT_stereo3d_set(wmOperatorType *ot)
  * \{ */
 
 #if defined(WITH_APPLE_CROSSPLATFORM)
+static bool wm_ios_immersive_poll(bContext *C)
+{
+  return WM_operator_winactive(C) && GHOST_IOS_immersive_space_is_supported();
+}
+
 static wmOperatorStatus wm_ios_immersive_toggle_exec(bContext *C, wmOperator * /*op*/)
 {
+  if (!GHOST_IOS_immersive_space_is_supported()) {
+    GHOST_IOS_show_native_alert(
+        "Immersive Space",
+        "This feature requires a native visionOS (Apple Vision Pro) build. "
+        "Use APPLE_TARGET_DEVICE=visionos with WITH_VISIONOS_IMMERSIVE_SPACE=ON. "
+        "iPad AR preview is on the ipad-mr branch.");
+    return OPERATOR_CANCELLED;
+  }
+
   if (GHOST_IOS_immersive_mode_is_active()) {
     if (!GHOST_IOS_set_immersive_mode_enabled(false, nullptr)) {
       return OPERATOR_CANCELLED;
@@ -4217,11 +4231,12 @@ static wmOperatorStatus wm_ios_immersive_toggle_exec(bContext *C, wmOperator * /
   }
 
   char usdz_path[FILE_MAX] = "";
-#  ifdef WITH_USD
   {
     wmOperatorType *ot = WM_operatortype_find("WM_OT_usd_export", true);
     if (ot == nullptr) {
-      GHOST_IOS_show_native_alert("Mixed Reality", "USD export is not available in this build.");
+      GHOST_IOS_show_native_alert(
+          "Immersive Space",
+          "USD export is not available in this build. Enable WITH_USD and rebuild.");
       return OPERATOR_CANCELLED;
     }
 
@@ -4245,20 +4260,17 @@ static wmOperatorStatus wm_ios_immersive_toggle_exec(bContext *C, wmOperator * /
 
     if (!(export_status & OPERATOR_FINISHED) || !BLI_exists(usdz_path)) {
       GHOST_IOS_show_native_alert(
-          "Mixed Reality",
-          "Could not export the current scene to USDZ for MR preview.");
+          "Immersive Space",
+          "Could not export the current scene to USDZ for Immersive Space.");
       return OPERATOR_CANCELLED;
     }
   }
-#  else
-  GHOST_IOS_show_native_alert("Mixed Reality", "USD support is required for MR scene preview.");
-  return OPERATOR_CANCELLED;
-#  endif
 
   if (!GHOST_IOS_set_immersive_mode_enabled(true, usdz_path)) {
     GHOST_IOS_show_native_alert(
-        "Mixed Reality",
-        "Could not open MR preview. Make sure the app window is active and try again.");
+        "Immersive Space",
+        "Could not open Immersive Space. Confirm this is a visionOS build with "
+        "RealityKit Immersive Space enabled.");
     return OPERATOR_CANCELLED;
   }
 
@@ -4271,11 +4283,10 @@ static void WM_OT_ios_immersive_toggle(wmOperatorType *ot)
   ot->name = "Open Immersive Space";
   ot->idname = "WM_OT_ios_immersive_toggle";
   ot->description =
-      "Export the visible scene to USDZ and open Vision Pro Immersive Space "
-      "(falls back to iPad AR preview when Immersive Space is unavailable)";
+      "Export the visible scene to USDZ and open Apple Vision Pro Immersive Space (visionOS only)";
 
   ot->exec = wm_ios_immersive_toggle_exec;
-  ot->poll = WM_operator_winactive;
+  ot->poll = wm_ios_immersive_poll;
 }
 #endif
 

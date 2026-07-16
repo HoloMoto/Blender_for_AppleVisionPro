@@ -545,7 +545,7 @@ class TOPBAR_MT_window(Menu):
 
         layout.operator("wm.window_fullscreen_toggle", icon='FULLSCREEN_ENTER')
 
-        if hasattr(bpy.ops.wm, "ios_immersive_toggle"):
+        if hasattr(bpy.ops.wm, "ios_immersive_toggle") and bpy.ops.wm.ios_immersive_toggle.poll():
             layout.separator()
             layout.operator("wm.ios_immersive_toggle", text="Open Immersive Space")
 

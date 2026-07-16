@@ -3,8 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 /**
- * ObjC-callable bridge into Immersive Space open/dismiss.
- * On non-visionOS builds these are stubs so the iPad AR path remains the fallback.
+ * ObjC-callable bridge into Immersive Space open/dismiss (visionOS / Vision Pro).
  */
 
 import Foundation
@@ -34,6 +33,10 @@ public final class BlenderImmersiveBridge: NSObject {
   }
 
   @objc public static func isActive() -> Bool {
-    BlenderImmersiveState.shared.isActive
+    #if os(visionOS)
+      return BlenderImmersiveState.shared.isActive
+    #else
+      return false
+    #endif
   }
 }

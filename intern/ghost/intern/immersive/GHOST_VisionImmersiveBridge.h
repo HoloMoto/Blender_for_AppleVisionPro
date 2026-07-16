@@ -3,9 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 /**
- * ObjC / C entry points into the Swift Immersive Space bridge.
- * On iPad builds these return false and GHOST falls back to ARSCNView.
- * On visionOS (WITH_VISIONOS_IMMERSIVE_SPACE) they drive RealityKit ImmersiveSpace.
+ * ObjC / C entry points into the Swift Immersive Space bridge (Vision Pro only).
  */
 
 #pragma once
@@ -15,6 +13,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/** True only on visionOS builds with Immersive Space support compiled in. */
+bool GHOST_Vision_immersive_space_is_supported(void);
 
 /** Set the USDZ path that the Immersive Space RealityView should load. */
 void GHOST_Vision_set_immersive_model_path(const char *usdz_path);

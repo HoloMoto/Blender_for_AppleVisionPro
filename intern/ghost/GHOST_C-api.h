@@ -107,13 +107,14 @@ extern bool GHOST_IOS_documents_export_filepath(const char *filename,
 /** Show a native alert (visible without log access). */
 extern void GHOST_IOS_show_native_alert(const char *title, const char *message);
 /**
- * Enter or leave mixed-reality scene preview.
- * \param usdz_path: Optional path to a USDZ exported from the current Blender scene
- * (used when \a enable is true). May be null.
+ * Enter or leave Vision Pro Immersive Space (RealityKit).
+ * \param usdz_path: USDZ exported from the current Blender scene (when enabling).
  */
 extern bool GHOST_IOS_set_immersive_mode_enabled(bool enable, const char *usdz_path);
-/** True while the immersive MR preview is presented. */
-extern bool GHOST_IOS_immersive_mode_is_active();
+/** True while Vision Pro Immersive Space is open. */
+extern bool GHOST_IOS_immersive_mode_is_active(void);
+/** True only on visionOS builds with Immersive Space support. */
+extern bool GHOST_IOS_immersive_space_is_supported(void);
 
 #endif
 
