@@ -338,10 +338,12 @@ extern "C" int GHOST_HACK_getFirstFile(char buf[]);
  */
 
 #ifdef WITH_APPLE_CROSSPLATFORM
+#  ifndef WITH_VISIONOS_SWIFT_MAIN
 int main(int argc, const char **argv)
 {
   return GHOST_iosmain(argc, argv);
 }
+#  endif
 
 int main_ios_callback(int argc, const char **argv)
 #else

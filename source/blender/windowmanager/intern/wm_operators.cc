@@ -4268,10 +4268,11 @@ static wmOperatorStatus wm_ios_immersive_toggle_exec(bContext *C, wmOperator * /
 
 static void WM_OT_ios_immersive_toggle(wmOperatorType *ot)
 {
-  ot->name = "View Scene in Mixed Reality";
+  ot->name = "Open Immersive Space";
   ot->idname = "WM_OT_ios_immersive_toggle";
   ot->description =
-      "Export the visible scene to USDZ and place it in camera-tracked mixed reality space";
+      "Export the visible scene to USDZ and open Vision Pro Immersive Space "
+      "(falls back to iPad AR preview when Immersive Space is unavailable)";
 
   ot->exec = wm_ios_immersive_toggle_exec;
   ot->poll = WM_operator_winactive;

@@ -547,7 +547,7 @@ class TOPBAR_MT_window(Menu):
 
         if hasattr(bpy.ops.wm, "ios_immersive_toggle"):
             layout.separator()
-            layout.operator("wm.ios_immersive_toggle", text="View Scene in Mixed Reality")
+            layout.operator("wm.ios_immersive_toggle", text="Open Immersive Space")
 
         layout.separator()
 

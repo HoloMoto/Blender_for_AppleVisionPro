@@ -15,6 +15,7 @@
 #include "GHOST_WindowIOS.hh"
 
 #include "GHOST_ISystem.hh"
+#include "immersive/GHOST_VisionImmersiveBridge.h"
 
 #import <ARKit/ARKit.h>
 #import <SceneKit/SceneKit.h>
@@ -324,13 +325,8 @@ static SCNNode *ghost_ios_load_model_node(NSString *path)
 static bool ghost_ios_immersive_set_enabled_impl(const bool enable, const char *usdz_path)
 {
   if (enable) {
-    if (g_ios_immersive_active) {
+    if (g_ios_immersive_active || GHOST_Vision_immersive_space_is_active()) {
       return true;
-    }
-
-    UIViewController *presenting_vc = ghost_ios_top_presenting_view_controller();
-    if (presenting_vc == nil) {
-      return false;
     }
 
     if (usdz_path != nullptr && usdz_path[0] != '\0') {
@@ -338,6 +334,21 @@ static bool ghost_ios_immersive_set_enabled_impl(const bool enable, const char *
     }
     else {
       g_ios_immersive_model_path.clear();
+    }
+
+    /* Prefer Vision Pro Immersive Space (RealityKit) when the Swift bridge is available. */
+    GHOST_Vision_set_immersive_model_path(
+        g_ios_immersive_model_path.empty() ? nullptr : g_ios_immersive_model_path.c_str());
+    if (GHOST_Vision_open_immersive_space()) {
+      g_ios_immersive_active = true;
+      ghost_ios_set_blender_rendering_paused(true);
+      return true;
+    }
+
+    /* iPad / fallback: camera-tracked ARSCNView preview. */
+    UIViewController *presenting_vc = ghost_ios_top_presenting_view_controller();
+    if (presenting_vc == nil) {
+      return false;
     }
 
     GHOST_IOSImmersiveViewController *immersive_vc = [[GHOST_IOSImmersiveViewController alloc] init];
@@ -351,6 +362,15 @@ static bool ghost_ios_immersive_set_enabled_impl(const bool enable, const char *
 
     [presenting_vc presentViewController:immersive_vc animated:YES completion:nil];
     return true;
+  }
+
+  if (GHOST_Vision_immersive_space_is_active() || g_ios_immersive_active) {
+    if (GHOST_Vision_dismiss_immersive_space()) {
+      g_ios_immersive_active = false;
+      g_ios_immersive_model_path.clear();
+      ghost_ios_set_blender_rendering_paused(false);
+      return true;
+    }
   }
 
   if (!g_ios_immersive_active) {
@@ -383,5 +403,5 @@ extern "C" bool GHOST_IOS_set_immersive_mode_enabled(const bool enable, const ch
 
 extern "C" bool GHOST_IOS_immersive_mode_is_active()
 {
-  return g_ios_immersive_active;
+  return g_ios_immersive_active || GHOST_Vision_immersive_space_is_active();
 }

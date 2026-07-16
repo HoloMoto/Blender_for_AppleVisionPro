@@ -181,7 +181,7 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
     message(STATUS "Configure Ghost for Apple Cross platform: iOS")
     
     if(APPLE_TARGET_IOS)
-      # GHOST modules for iPadOS.
+      # GHOST modules for iPadOS / visionOS cross-platform.
       list(APPEND SRC
         intern/GHOST_SystemIOS.hh
         intern/GHOST_WindowIOS.hh
@@ -189,10 +189,31 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
         intern/GHOST_SystemIOS.mm
         intern/GHOST_WindowIOS.mm
         intern/GHOST_IOSImmersive.mm
+        intern/immersive/GHOST_VisionImmersiveBridge.h
+        intern/immersive/GHOST_VisionImmersiveBridge.mm
 
         intern/GHOST_ContextIOS.mm
         intern/GHOST_ContextIOS.hh
       )
+
+      # Vision Pro Immersive Space (Swift / RealityKit). Off by default so iPad
+      # builds keep using the ARSCNView fallback without requiring Swift.
+      option(WITH_VISIONOS_IMMERSIVE_SPACE
+             "Build Swift RealityKit Immersive Space support for visionOS"
+             OFF)
+      if(WITH_VISIONOS_IMMERSIVE_SPACE)
+        enable_language(Swift)
+        add_definitions(-DWITH_VISIONOS_IMMERSIVE_SPACE)
+        list(APPEND SRC
+          intern/immersive/BlenderImmersiveState.swift
+          intern/immersive/BlenderImmersiveBridge.swift
+          intern/immersive/BlenderImmersiveSpaceView.swift
+          intern/immersive/BlenderVisionApp.swift
+        )
+        set(CMAKE_XCODE_ATTRIBUTE_SWIFT_VERSION "5.0")
+        set(CMAKE_XCODE_ATTRIBUTE_ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES YES)
+        message(STATUS "VisionOS Immersive Space (Swift/RealityKit) enabled")
+      endif()
     endif()
   else()
     # MacOS

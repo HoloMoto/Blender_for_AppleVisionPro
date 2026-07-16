@@ -30,8 +30,22 @@ if(WITH_APPLE_CROSSPLATFORM)
 
     set(OSX_MIN_DEPLOYMENT_TARGET 16.00)
     set(APPLE_OS_MINVERSION_CFLAG "-miphonesimulator-version-min=${OSX_MIN_DEPLOYMENT_TARGET}")
+  # Apple Vision Pro: visionOS arm64 (Immersive Space / RealityKit)
+  elseif(APPLE_TARGET_DEVICE STREQUAL "visionos")
+    set(CMAKE_SYSTEM_NAME "visionOS" CACHE INTERNAL "" FORCE)
+    set(APPLE_TARGET_IOS TRUE)
+    set(APPLE_TARGET_VISIONOS TRUE)
+
+    set(APPLE_SDK_CROSSPLATFORM_NAME "XROS")
+    set(APPLE_SDK_CROSSPLATFORM_NAME_LOWER "xros")
+
+    set(OSX_MIN_DEPLOYMENT_TARGET 1.0)
+    set(APPLE_OS_MINVERSION_CFLAG "-mxros-version-min=${OSX_MIN_DEPLOYMENT_TARGET}")
+    # Immersive Space scaffolding expects Swift RealityKit by default on visionOS.
+    set(WITH_VISIONOS_IMMERSIVE_SPACE ON CACHE BOOL
+        "Build Swift RealityKit Immersive Space support for visionOS" FORCE)
   else()
-    message(FATAL_ERROR "Unsupported APPLE_TARGET_DEVICE = ${APPLE_TARGET_DEVICE}. To add support, ensure setup parameters in platform_apple_xcode.cmake are configured. ")
+    message(FATAL_ERROR "Unsupported APPLE_TARGET_DEVICE = ${APPLE_TARGET_DEVICE}. Supported: ios, ios-simulator, visionos.")
     set(CMAKE_SYSTEM_NAME)
     set(APPLE_TARGET_IOS FALSE)
     set(APPLE_SDK_CROSSPLATFORM_NAME)
