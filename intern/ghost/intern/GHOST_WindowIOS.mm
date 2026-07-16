@@ -2535,6 +2535,13 @@ bool GHOST_WindowIOS::makeKeyWindow()
   return true;
 }
 
+void GHOST_WindowIOS::setRenderingPaused(bool paused)
+{
+  if (metal_view_ != nil) {
+    metal_view_.paused = paused ? YES : NO;
+  }
+}
+
 void GHOST_WindowIOS::resignKeyWindow()
 {
   GHOST_ASSERT(system_ios_->current_active_window_ == this,

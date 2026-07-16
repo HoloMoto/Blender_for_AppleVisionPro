@@ -43,6 +43,7 @@
 #include "BLT_translation.hh"
 
 #include "BLI_dial_2d.h"
+#include "BLI_fileops.hh"
 #include "BLI_listbase.h"
 #include "BLI_math_rotation.h"
 #include "BLI_math_vector.h"
@@ -54,6 +55,7 @@
 #include "BLI_utildefines.h"
 
 #include "BKE_anim_data.hh"
+#include "BKE_appdir.hh"
 #include "BKE_brush.hh"
 #include "BKE_colortools.hh"
 #include "BKE_context.hh"
@@ -4206,11 +4208,57 @@ static void WM_OT_stereo3d_set(wmOperatorType *ot)
 #if defined(WITH_APPLE_CROSSPLATFORM)
 static wmOperatorStatus wm_ios_immersive_toggle_exec(bContext *C, wmOperator * /*op*/)
 {
-  const bool enable = !GHOST_IOS_immersive_mode_is_active();
-  if (!GHOST_IOS_set_immersive_mode_enabled(enable)) {
+  if (GHOST_IOS_immersive_mode_is_active()) {
+    if (!GHOST_IOS_set_immersive_mode_enabled(false, nullptr)) {
+      return OPERATOR_CANCELLED;
+    }
+    WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+    return OPERATOR_FINISHED;
+  }
+
+  char usdz_path[FILE_MAX] = "";
+#  ifdef WITH_USD
+  {
+    wmOperatorType *ot = WM_operatortype_find("WM_OT_usd_export", true);
+    if (ot == nullptr) {
+      GHOST_IOS_show_native_alert("Mixed Reality", "USD export is not available in this build.");
+      return OPERATOR_CANCELLED;
+    }
+
+    BLI_path_join(usdz_path, sizeof(usdz_path), BKE_tempdir_session(), "immersive_preview.usdz");
+    if (BLI_exists(usdz_path)) {
+      BLI_delete(usdz_path, false, false);
+    }
+
+    PointerRNA props_ptr;
+    WM_operator_properties_create_ptr(&props_ptr, ot);
+    RNA_string_set(&props_ptr, "filepath", usdz_path);
+    RNA_boolean_set(&props_ptr, "visible_objects_only", true);
+    RNA_boolean_set(&props_ptr, "selected_objects_only", false);
+    RNA_boolean_set(&props_ptr, "export_materials", true);
+    RNA_boolean_set(&props_ptr, "export_meshes", true);
+    RNA_boolean_set(&props_ptr, "generate_preview_surface", true);
+
+    const wmOperatorStatus export_status = WM_operator_name_call_ptr(
+        C, ot, blender::wm::OpCallContext::ExecDefault, &props_ptr, nullptr);
+    WM_operator_properties_free(&props_ptr);
+
+    if (!(export_status & OPERATOR_FINISHED) || !BLI_exists(usdz_path)) {
+      GHOST_IOS_show_native_alert(
+          "Mixed Reality",
+          "Could not export the current scene to USDZ for MR preview.");
+      return OPERATOR_CANCELLED;
+    }
+  }
+#  else
+  GHOST_IOS_show_native_alert("Mixed Reality", "USD support is required for MR scene preview.");
+  return OPERATOR_CANCELLED;
+#  endif
+
+  if (!GHOST_IOS_set_immersive_mode_enabled(true, usdz_path)) {
     GHOST_IOS_show_native_alert(
-        "Reality Kit",
-        "Could not open immersive mode. Make sure the app window is active and try again.");
+        "Mixed Reality",
+        "Could not open MR preview. Make sure the app window is active and try again.");
     return OPERATOR_CANCELLED;
   }
 
@@ -4220,9 +4268,10 @@ static wmOperatorStatus wm_ios_immersive_toggle_exec(bContext *C, wmOperator * /
 
 static void WM_OT_ios_immersive_toggle(wmOperatorType *ot)
 {
-  ot->name = "Toggle Reality Kit Immersive Mode";
+  ot->name = "View Scene in Mixed Reality";
   ot->idname = "WM_OT_ios_immersive_toggle";
-  ot->description = "Toggle between standard 2D mode and Reality Kit immersive mode";
+  ot->description =
+      "Export the visible scene to USDZ and place it in camera-tracked mixed reality space";
 
   ot->exec = wm_ios_immersive_toggle_exec;
   ot->poll = WM_operator_winactive;

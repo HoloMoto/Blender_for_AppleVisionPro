@@ -106,9 +106,13 @@ extern bool GHOST_IOS_documents_export_filepath(const char *filename,
                                                const size_t final_path_max);
 /** Show a native alert (visible without log access). */
 extern void GHOST_IOS_show_native_alert(const char *title, const char *message);
-/** Enter or leave a RealityKit immersive ARView session. */
-extern bool GHOST_IOS_set_immersive_mode_enabled(bool enable);
-/** True while the immersive RealityKit view is presented. */
+/**
+ * Enter or leave mixed-reality scene preview.
+ * \param usdz_path: Optional path to a USDZ exported from the current Blender scene
+ * (used when \a enable is true). May be null.
+ */
+extern bool GHOST_IOS_set_immersive_mode_enabled(bool enable, const char *usdz_path);
+/** True while the immersive MR preview is presented. */
 extern bool GHOST_IOS_immersive_mode_is_active();
 
 #endif

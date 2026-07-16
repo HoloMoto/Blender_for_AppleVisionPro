@@ -363,6 +363,9 @@ class GHOST_WindowIOS : public GHOST_Window {
 
   /** Request first-responder so Bluetooth keyboards route key events to Blender. */
   void becomeHardwareInputResponder();
+
+  /** Pause or resume MTKView drawing (e.g. while an immersive overlay is shown). */
+  void setRenderingPaused(bool paused);
 };
 
 #ifdef WITH_INPUT_IME
