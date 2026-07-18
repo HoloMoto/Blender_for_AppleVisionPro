@@ -441,6 +441,11 @@ function(blender_add_lib__impl
   # blenders dependency loops are longer than cmake expects and we need additional loops to
   # properly link.
   set_property(TARGET ${name} APPEND PROPERTY LINK_INTERFACE_MULTIPLICITY 3)
+
+  if(CMAKE_GENERATOR STREQUAL "Xcode")
+    set_target_properties(${name} PROPERTIES
+      XCODE_ATTRIBUTE_OTHER_LIBTOOLFLAGS "-no_warning_for_no_symbols")
+  endif()
 endfunction()
 
 

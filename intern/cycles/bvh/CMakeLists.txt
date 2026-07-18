@@ -16,14 +16,20 @@ set(SRC
   binning.cpp
   build.cpp
   embree.cpp
-  hiprt.cpp
   multi.cpp
   node.cpp
-  optix.cpp
   sort.cpp
   split.cpp
   unaligned.cpp
 )
+
+if(WITH_CYCLES_DEVICE_HIPRT)
+  list(APPEND SRC hiprt.cpp)
+endif()
+
+if(WITH_CYCLES_DEVICE_OPTIX)
+  list(APPEND SRC optix.cpp)
+endif()
 
 set(SRC_METAL
   metal.mm

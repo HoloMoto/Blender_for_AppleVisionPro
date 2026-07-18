@@ -11,7 +11,7 @@ import Foundation
 @objc(BlenderImmersiveBridge)
 public final class BlenderImmersiveBridge: NSObject {
   @objc public static func setModelPath(_ path: String?) {
-    BlenderImmersiveState.shared.setModelPath(path)
+    BlenderImmersiveState.shared.updateModelPath(path)
   }
 
   @objc public static func openImmersiveSpace() -> Bool {
@@ -37,6 +37,15 @@ public final class BlenderImmersiveBridge: NSObject {
       return BlenderImmersiveState.shared.isActive
     #else
       return false
+    #endif
+  }
+
+  @objc(updateActiveObject:x:y:z:)
+  public static func updateActiveObject(_ name: String?, x: Float, y: Float, z: Float) {
+    #if os(visionOS)
+      DispatchQueue.main.async {
+        BlenderImmersiveState.shared.updateActiveObject(name, x: x, y: y, z: z)
+      }
     #endif
   }
 }

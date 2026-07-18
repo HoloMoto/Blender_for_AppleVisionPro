@@ -72,6 +72,11 @@ macro(cycles_add_library target library_deps)
   endif()
 
   cycles_set_solution_folder(${target})
+
+  if(CMAKE_GENERATOR STREQUAL "Xcode")
+    set_target_properties(${target} PROPERTIES
+      XCODE_ATTRIBUTE_OTHER_LIBTOOLFLAGS "-no_warning_for_no_symbols")
+  endif()
 endmacro()
 
 macro(cycles_external_libraries_append libraries)

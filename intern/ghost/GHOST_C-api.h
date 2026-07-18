@@ -115,6 +115,11 @@ extern bool GHOST_IOS_set_immersive_mode_enabled(bool enable, const char *usdz_p
 extern bool GHOST_IOS_immersive_mode_is_active(void);
 /** True only on visionOS builds with Immersive Space support. */
 extern bool GHOST_IOS_immersive_space_is_supported(void);
+/** Reload a completed USDZ export while the Immersive Space remains open. */
+extern void GHOST_IOS_immersive_reload_model(const char *usdz_path);
+/** Push the active Blender object's transform state to the RealityKit view. */
+extern void GHOST_IOS_immersive_update_active_object(
+    const char *object_name, float blender_x, float blender_y, float blender_z);
 
 #endif
 

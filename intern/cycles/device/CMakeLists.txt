@@ -130,14 +130,26 @@ set(SRC_HEADERS
 set(SRC
   ${SRC_BASE}
   ${SRC_CPU}
-  ${SRC_CUDA}
-  ${SRC_HIP}
-  ${SRC_HIPRT}
   ${SRC_DUMMY}
   ${SRC_MULTI}
-  ${SRC_OPTIX}
   ${SRC_HEADERS}
 )
+
+if(WITH_CYCLES_DEVICE_CUDA)
+  list(APPEND SRC ${SRC_CUDA})
+endif()
+
+if(WITH_CYCLES_DEVICE_HIP)
+  list(APPEND SRC ${SRC_HIP})
+endif()
+
+if(WITH_CYCLES_DEVICE_HIPRT)
+  list(APPEND SRC ${SRC_HIPRT})
+endif()
+
+if(WITH_CYCLES_DEVICE_OPTIX)
+  list(APPEND SRC ${SRC_OPTIX})
+endif()
 
 set(LIB
   cycles_kernel

@@ -9,6 +9,7 @@
  */
 
 #include "GHOST_ContextIOS.hh"
+#include "GHOST_IOSVisionCompat.h"
 
 #include "GHOST_Debug.hh"
 
@@ -56,7 +57,8 @@ GHOST_ContextIOS::GHOST_ContextIOS(const GHOST_ContextParams &context_params,
     /* Initialize Metal device (Using system default) */
     id<MTLDevice> metalDevice = MTLCreateSystemDefaultDevice();
 
-    CGRect screenRect = [[UIScreen mainScreen] bounds];
+    CGRect screenRect = ghost_ios_default_bounds();
+    CGFloat scaling_fac = ghost_ios_display_scale(nil);
     CGFloat screenWidth = screenRect.size.width;
     CGFloat screenHeight = screenRect.size.height;
     if (screenWidth <= 0 || screenHeight <= 0) {
@@ -320,8 +322,9 @@ void GHOST_ContextIOS::metalInitFramebuffer()
 
 void GHOST_ContextIOS::metalUpdateFramebuffer()
 {
-  CGRect screenRect = [[UIScreen mainScreen] bounds];
-  CGFloat scaling_fac = [UIScreen mainScreen].scale;
+  UIView *scale_view = metal_view_ ? (UIView *)metal_view_ : ui_view_;
+  CGRect screenRect = scale_view ? scale_view.bounds : ghost_ios_default_bounds();
+  CGFloat scaling_fac = ghost_ios_display_scale(scale_view);
   CGFloat screenWidth = screenRect.size.width;
   CGFloat screenHeight = screenRect.size.height;
   size_t width = screenWidth * scaling_fac;

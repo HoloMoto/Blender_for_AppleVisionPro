@@ -135,6 +135,8 @@ cmake --build . --target datatoc glsl_preprocess -j8
 
 Note the output path, e.g. `../build_darwin_tools/bin` — you will pass it as `BLENDER_IOS_HOST_TOOLS_DIR`.
 
+An `APPLE_TARGET_DEVICE=ios` build deploys to Vision Pro in **iPad compatibility mode** and **cannot** open Immersive Space. Use a native visionOS build (below).
+
 ### 5. Configure the iOS build
 
 ```bash
@@ -156,6 +158,41 @@ cmake --build . --target blender -j8
 ```
 
 Output: `build_ios_fresh/bin/Debug/Blender.app`
+
+### 5b. Configure the visionOS build (Vision Pro Immersive Space)
+
+Branch **`immersive-space`** only. Requires Xcode visionOS SDK and **`lib/visionos_arm64`**
+(visionOS-native prebuilts — do not reuse `lib/ios_arm64` dylibs).
+
+**Step 1 — Build visionOS dependencies** (first time; several hours):
+
+```bash
+# Homebrew build tools (once)
+brew install autoconf automake bison dos2unix libtool meson ninja pkg-config yasm
+export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/libtool/libexec/gnubin:/opt/homebrew/bin:$PATH"
+
+cd blender_fresh
+# macOS host tools required for cross-compiling visionOS deps
+make deps
+# visionOS libraries → lib/visionos_arm64
+make deps visionos
+```
+
+**Step 2 — Configure and build Blender:**
+
+```bash
+mkdir -p ../build_visionos && cd ../build_visionos
+cmake ../blender_fresh \
+  -G Xcode \
+  -DAPPLE_TARGET_DEVICE=visionos \
+  -DWITH_VISIONOS_IMMERSIVE_SPACE=ON \
+  -DBLENDER_IOS_DEVELOPMENT_TEAM=YOUR_10_CHAR_TEAM_ID \
+  -DBLENDER_IOS_BUNDLE_ID=com.yourdomain.blendervision \
+  -DBLENDER_IOS_HOST_TOOLS_DIR=/absolute/path/to/build_darwin_tools/bin
+cmake --build . --target blender -j8
+```
+
+Entry: **Window → Open Immersive Space** (exports scene to USDZ, opens RealityKit Immersive Space).
 
 - Open the generated Xcode project or deploy the `.app` to a **physical** Vision Pro / iPad / iPhone.
 - Remove any older Blender install on the device before testing a new build.

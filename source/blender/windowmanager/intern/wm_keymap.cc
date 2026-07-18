@@ -10,6 +10,7 @@
 
 #include <cstring>
 #include <fmt/format.h>
+#include <string>
 
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
@@ -1252,7 +1253,11 @@ std::optional<std::string> WM_keymap_item_raw_to_string(const int8_t shift,
     result_array.remove_last();
   }
 
-  return fmt::to_string(fmt::join(result_array, ""));
+  std::string result;
+  for (const std::string_view &part : result_array) {
+    result.append(part);
+  }
+  return result;
 }
 
 std::optional<std::string> WM_keymap_item_to_string(const wmKeyMapItem *kmi, const bool compact)

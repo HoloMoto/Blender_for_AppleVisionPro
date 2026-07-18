@@ -178,9 +178,12 @@ OS:=$(shell uname -s)
 OS_NCASE:=$(shell uname -s | tr '[A-Z]' '[a-z]')
 # Path to host machine build folder. Cross compiled builds will require native host tools during build process.
 OS_NCASE_CROSSCOMPILE:=$(OS_NCASE)
-# Apple: ios and ios-simulator
-# iOS and iOS-Simulator libs will build to /ios{_simulator}_arm64 instead of /darwin_arm64.
-ifneq "$(findstring ios-simulator, $(MAKECMDGOALS))" ""
+# Apple: visionos, ios and ios-simulator
+# visionOS/iOS libs build to /visionos_arm64, /ios{_simulator}_arm64 instead of /darwin_arm64.
+ifneq "$(findstring visionos, $(MAKECMDGOALS))" ""
+	OS_NCASE:=visionos
+	DEPS_ARGS:=-DAPPLE_TARGET_DEVICE=visionos
+else ifneq "$(findstring ios-simulator, $(MAKECMDGOALS))" ""
 	OS_NCASE:=ios-simulator
 	DEPS_ARGS:=-DAPPLE_TARGET_DEVICE=ios-simulator
 else ifneq "$(findstring ios, $(MAKECMDGOALS))" ""
@@ -475,6 +478,14 @@ tools: .FORCE
 	$(BUILD_COMMAND) -C "$(BUILD_DIR)" -j $(NPROCS) makesdna
 	$(BUILD_COMMAND) -C "$(BUILD_DIR)" -j $(NPROCS) msgfmt
    	
+# CMake 4.x breaks many dependency projects; prefer CMake 3.31 for deps when present.
+CMAKE_DEPS_EXE ?= $(wildcard $(shell dirname "$(BLENDER_DIR)")/tools/cmake-3.31/CMake.app/Contents/bin/cmake)
+ifneq ($(CMAKE_DEPS_EXE),)
+	CMAKE_DEPS := $(CMAKE_DEPS_EXE)
+else
+	CMAKE_DEPS := cmake
+endif
+
 # -----------------------------------------------------------------------------
 # Build dependencies
 DEPS_TARGET = install
@@ -488,9 +499,10 @@ deps: .FORCE
 	@echo
 	@echo Configuring dependencies in \"$(DEPS_BUILD_DIR)\", install to \"$(DEPS_INSTALL_DIR)\"
 	
-	@cmake -H"$(DEPS_SOURCE_DIR)" \
+	@$(CMAKE_DEPS) -H"$(DEPS_SOURCE_DIR)" \
 	       -B"$(DEPS_BUILD_DIR)" \
 	       -DHARVEST_TARGET=$(DEPS_INSTALL_DIR) \
+	       -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 	       ${DEPS_ARGS} \
 	       ${DEPS_CROSSCOMPILE_ARGS}
 
@@ -707,7 +719,9 @@ help_features: .FORCE
 clean: .FORCE
 	$(BUILD_COMMAND) -C "$(BUILD_DIR)" clean
 	
-# Do-nothing target so Make doesn't raise warning when we specify 'ios-{simulator}' in 'make deps ios{-simluator}'
+# Do-nothing target so Make doesn't raise warning when we specify platform goals in 'make deps ...'
+visionos: .FORCE
+	@echo "visionOS target detected"
 ios: .FORCE
 	@echo "iOS target detected"
 ios-simulator: .FORCE

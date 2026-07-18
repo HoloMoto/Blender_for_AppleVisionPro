@@ -39,7 +39,7 @@ if(WITH_APPLE_CROSSPLATFORM)
     set(APPLE_SDK_CROSSPLATFORM_NAME "XROS")
     set(APPLE_SDK_CROSSPLATFORM_NAME_LOWER "xros")
 
-    set(OSX_MIN_DEPLOYMENT_TARGET 1.0)
+    set(OSX_MIN_DEPLOYMENT_TARGET 26.0)
     set(APPLE_OS_MINVERSION_CFLAG "-mxros-version-min=${OSX_MIN_DEPLOYMENT_TARGET}")
     # Immersive Space scaffolding expects Swift RealityKit by default on visionOS.
     set(WITH_VISIONOS_IMMERSIVE_SPACE ON CACHE BOOL
@@ -344,9 +344,14 @@ else()
 endif()
 
 if(NOT ${CMAKE_GENERATOR} MATCHES "Xcode")
-  # Force CMAKE_OSX_DEPLOYMENT_TARGET for makefiles, will not work else (CMake bug?)
-  string(APPEND CMAKE_C_FLAGS " ${APPLE_OS_MINVERSION_CFLAG}")
-  string(APPEND CMAKE_CXX_FLAGS " ${APPLE_OS_MINVERSION_CFLAG}")
+  # visionOS uses -target arm64-apple-xros*; -mxros-version-min with -arch arm64 breaks nested configures.
+  if(APPLE_TARGET_VISIONOS)
+    string(APPEND CMAKE_C_FLAGS " -target arm64-apple-xros${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    string(APPEND CMAKE_CXX_FLAGS " -target arm64-apple-xros${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  else()
+    string(APPEND CMAKE_C_FLAGS " ${APPLE_OS_MINVERSION_CFLAG}")
+    string(APPEND CMAKE_CXX_FLAGS " ${APPLE_OS_MINVERSION_CFLAG}")
+  endif()
   add_definitions("-DMACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
 endif()
 

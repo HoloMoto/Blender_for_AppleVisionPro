@@ -12,6 +12,12 @@ import UIKit
 
 #if os(visionOS)
 
+  /* GHOST_SystemIOS.mm: kicks off Blender's main initialization (main_ios_callback).
+   * Under the SwiftUI lifecycle the Info.plist scene delegate (IOSSceneDelegate)
+   * never connects, so Blender must be started explicitly from here. */
+  @_silgen_name("GHOST_IOS_StartBlenderFromSwiftUI")
+  private func GHOST_IOS_StartBlenderFromSwiftUI()
+
   @main
   struct BlenderVisionApp: App {
     @UIApplicationDelegateAdaptor(BlenderUIKitAppDelegate.self) private var appDelegate
@@ -42,15 +48,38 @@ import UIKit
     }
   }
 
+  /// Host view controller: starts Blender once its window is attached to a scene.
+  final class BlenderHostViewController: UIViewController {
+    private var startedBlender = false
+
+    override func viewDidAppear(_ animated: Bool) {
+      super.viewDidAppear(animated)
+      startBlenderWhenSceneReady()
+    }
+
+    private func startBlenderWhenSceneReady() {
+      guard !startedBlender else { return }
+      if view.window?.windowScene != nil {
+        startedBlender = true
+        GHOST_IOS_StartBlenderFromSwiftUI()
+      }
+      else {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+          self?.startBlenderWhenSceneReady()
+        }
+      }
+    }
+  }
+
   /// Placeholder root until the UIKit MTKView hierarchy is attached into the WindowGroup.
   struct BlenderUIKitRootRepresentable: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
-      let vc = UIViewController()
+      let vc = BlenderHostViewController()
       vc.view.backgroundColor = .black
       /* Immersive open/dismiss is driven by notifications from GHOST. */
       let host = UIHostingController(rootView: BlenderImmersiveLauncher())
       host.view.backgroundColor = .clear
-      vc.addChild(host)
+      vc.addChildViewController(host)
       host.view.translatesAutoresizingMaskIntoConstraints = false
       vc.view.addSubview(host.view)
       NSLayoutConstraint.activate([

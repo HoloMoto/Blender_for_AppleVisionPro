@@ -73,6 +73,11 @@ set(LLVM_EXTRA_ARGS
   ${LLVM_XML2_ARGS}
 )
 
+if(WITH_APPLE_CROSSPLATFORM)
+  # sancov fails to compile with newer Xcode libc++; not needed for cross-compiled targets.
+  list(APPEND LLVM_EXTRA_ARGS -DLLVM_TOOL_SANCOV_BUILD=OFF)
+endif()
+
 if(WIN32)
   set(LLVM_GENERATOR "Ninja")
   list(APPEND LLVM_EXTRA_ARGS -DPython3_FIND_REGISTRY=NEVER)

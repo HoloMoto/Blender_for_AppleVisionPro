@@ -22,6 +22,8 @@ Do **not** push to upstream `origin` (blender/blender).
 
 ## Configure (required)
 
+**Prerequisite:** `lib/visionos_arm64` from `make deps visionos` (after `make deps` for macOS host tools).
+
 ```bash
 cmake -S blender_fresh -B build_visionos \
   -G Xcode \
@@ -34,9 +36,11 @@ cmake -S blender_fresh -B build_visionos \
 An `APPLE_TARGET_DEVICE=ios` build will compile, but Immersive Space will not open
 (`GHOST_IOS_immersive_space_is_supported()` is false). Use `visionos` for device runs.
 
+Linking iOS dylibs into a visionOS app fails (`built for 'iOS'`). Always use `lib/visionos_arm64`.
+
 ## Remaining work
 
 1. Attach GHOST MTKView into the SwiftUI `WindowGroup`
 2. Wire Blender init into the visionOS Swift `@main` path
-3. Dedicated `lib/visionos_arm64` when needed
+3. ~~Dedicated `lib/visionos_arm64` when needed~~ — `make deps visionos` wired; run the build
 4. Live scene refresh while Immersive Space stays open

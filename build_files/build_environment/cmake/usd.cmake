@@ -131,6 +131,8 @@ if(WITH_APPLE_CROSSPLATFORM)
     # TODO: Re-enable metal support once iOS compatible. Require updating USD.
     # NOTE: Temporarily disables: PXR_BUILD_GPU_SUPPORT, which will disable hydra storm.
     -DPXR_ENABLE_METAL_SUPPORT=OFF
+    # OpenVDB and Vulkan do not build for visionOS/iOS; USD must not require them.
+    -DPXR_ENABLE_OPENVDB_SUPPORT=OFF
 
     # Override CXX flags to directly provide required headers.	
     -DCMAKE_CXX_FLAGS=${USD_CMAKE_CXX_FLAGS} 
@@ -205,14 +207,21 @@ add_dependencies(
   external_python
   external_openimageio
   external_materialx
-  external_vulkan_loader
-  external_vulkan_headers
-  external_vulkan_memory_allocator
-  external_vulkan_utility_libraries
-  external_shaderc
-  external_spirv_reflect
-  openvdb
 )
+if(NOT WITH_APPLE_CROSSPLATFORM)
+  # Vulkan and OpenVDB do not build for visionOS/iOS; USD is configured
+  # without them there (PXR_ENABLE_VULKAN_SUPPORT/OPENVDB_SUPPORT=OFF).
+  add_dependencies(
+    external_usd
+    external_vulkan_loader
+    external_vulkan_headers
+    external_vulkan_memory_allocator
+    external_vulkan_utility_libraries
+    external_shaderc
+    external_spirv_reflect
+    openvdb
+  )
+endif()
 
 # Since USD 21.11 the libraries are prefixed with "usd_",
 # i.e. "libusd_m.a" became "libusd_usd_m.a".

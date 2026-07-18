@@ -19,10 +19,10 @@ set(MATERIALX_EXTRA_ARGS
 
 if(WITH_APPLE_CROSSPLATFORM)
   cmake_policy(SET CMP0074 NEW)
-  # CMAKE_SYSTEM_NAME should be set to iOS to get MaterialX iOS build
+  # CMAKE_SYSTEM_NAME should be set to iOS or visionOS to get MaterialX Apple cross-platform build.
   # MATERIALX_BUILD_IOS=ON is now deprecated
-  if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    message(FATAL_ERROR "CMAKE_SYSTEM_NAME should be 'iOS' if WITH_APPLE_CROSSPLATFORM set")
+  if(NOT CMAKE_SYSTEM_NAME MATCHES "^(iOS|visionOS)$")
+    message(FATAL_ERROR "CMAKE_SYSTEM_NAME should be 'iOS' or 'visionOS' if WITH_APPLE_CROSSPLATFORM set")
   endif()    
   set(MATERIALX_EXTRA_ARGS
     ${MATERIALX_EXTRA_ARGS}

@@ -100,3 +100,24 @@ extern "C" bool GHOST_IOS_immersive_space_is_supported()
 {
   return GHOST_Vision_immersive_space_is_supported();
 }
+
+extern "C" void GHOST_IOS_immersive_reload_model(const char *usdz_path)
+{
+  if (usdz_path == nullptr || usdz_path[0] == '\0' ||
+      !GHOST_Vision_immersive_space_is_active())
+  {
+    return;
+  }
+  GHOST_Vision_set_immersive_model_path(usdz_path);
+}
+
+extern "C" void GHOST_IOS_immersive_update_active_object(const char *object_name,
+                                                          const float blender_x,
+                                                          const float blender_y,
+                                                          const float blender_z)
+{
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return;
+  }
+  GHOST_Vision_update_active_object(object_name, blender_x, blender_y, blender_z);
+}

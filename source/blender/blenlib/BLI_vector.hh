@@ -112,12 +112,15 @@ class Vector {
 #  define UPDATE_VECTOR_SIZE(ptr) (ptr)->debug_size_ = int64_t((ptr)->end_ - (ptr)->begin_)
 #else
 #  define UPDATE_VECTOR_SIZE(ptr) ((void)0)
-#  if defined(WITH_APPLE_CROSSPLATFORM) || defined(WITH_CROSSCOMPILED_TOOLS)
+#  if defined(__APPLE__)
   /*
-   IOS_FIXME: We need Blender and the cross-compiled tools to agree on the size of a vector or bad
-   things will happen when we attempt to unpack the RNA packets (i.e. in rna_ui_gen.cc),
-   so make sure this is always defined. A better way to fix this might be to
-   make sure that we match build-type (Release, Debug etc.) for the cross-compiled tools.
+   IOS_FIXME: We need Blender and the cross-compiled host tools (makesrna etc.) to agree on the
+   size of a vector, or bad things will happen when unpacking RNA parameter packets (i.e. in
+   rna_ui_gen.cc): the generated offsets embed the host's sizeof(PointerRNA).
+   WITH_APPLE_CROSSPLATFORM is only defined for the device build, and WITH_CROSSCOMPILED_TOOLS
+   is a CMake option that is never passed as a compile definition, so keying on either produces
+   a host/device sizeof mismatch (80 vs 88 bytes for PointerRNA). Instead, include this field on
+   all Apple builds: the host tools always run on macOS, so host and device layouts then agree.
    */
   int64_t debug_size_;
 #  endif

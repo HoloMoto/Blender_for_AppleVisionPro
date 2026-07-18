@@ -186,10 +186,20 @@ else()
   # and fix the order of `-ldl` flags for SSL to avoid link errors.
   if(APPLE)
     if(WITH_APPLE_CROSSPLATFORM)
-      set(PYTHON_PATCH ${PATCH_CMD} --verbose -p1 -d 
-        ${BUILD_DIR}/python/src/external_python < 
-        ${PATCH_DIR}/python_ios.diff
-      )
+      if(APPLE_TARGET_VISIONOS)
+        set(PYTHON_PATCH ${PATCH_CMD} --verbose -p1 -d
+          ${BUILD_DIR}/python/src/external_python <
+          ${PATCH_DIR}/python_ios.diff &&
+          ${PATCH_CMD} --verbose -p1 -d
+          ${BUILD_DIR}/python/src/external_python <
+          ${PATCH_DIR}/python_visionos.diff
+        )
+      else()
+        set(PYTHON_PATCH ${PATCH_CMD} --verbose -p1 -d 
+          ${BUILD_DIR}/python/src/external_python < 
+          ${PATCH_DIR}/python_ios.diff
+        )
+      endif()
     else()
       set(PYTHON_PATCH ${PATCH_CMD} --verbose -p1 -d 
         ${BUILD_DIR}/python/src/external_python < 

@@ -32,6 +32,10 @@ set(SRC
   work_tile_scheduler.cpp
 )
 
+if(NOT WITH_CYCLES_DEVICE_OPTIX)
+  list(REMOVE_ITEM SRC denoiser_optix.cpp)
+endif()
+
 set(SRC_HEADERS
   adaptive_sampling.h
   denoiser.h

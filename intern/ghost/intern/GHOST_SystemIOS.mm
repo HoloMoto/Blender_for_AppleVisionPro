@@ -6,6 +6,7 @@
 
 #include "GHOST_ContextIOS.hh"
 #include "GHOST_WindowIOS.hh"
+#include "GHOST_IOSVisionCompat.h"
 
 #include "GHOST_Debug.hh"
 #include "GHOST_EventButton.hh"
@@ -48,6 +49,8 @@ const char **argv = nullptr;
 
 /* Implemented in wm.cc. */
 void WM_main_loop_body(bContext *C);
+/* Implemented in wm_operators.cc. */
+void WM_ios_immersive_sync_active_object(bContext *C);
 int main_ios_callback(int argc, const char **argv);
 
 @interface IOSAppDelegate : UIResponder <UIApplicationDelegate>
@@ -149,7 +152,7 @@ static UIViewController *ios_presenting_view_controller()
     }
   }
 
-  UIWindow *key_window = [UIApplication sharedApplication].keyWindow;
+  UIWindow *key_window = ghost_ios_fallback_key_window();
   if (key_window != nil && key_window.rootViewController != nil) {
     return key_window.rootViewController;
   }
@@ -294,6 +297,87 @@ static void ghost_ios_schedule_reactivation_burst()
   }
 }
 
+/* Start Blender's main initialization once. Shared between the UIKit lifecycle
+ * (IOSSceneDelegate below) and the SwiftUI lifecycle used on visionOS, where
+ * SwiftUI manages scenes itself and the Info.plist scene delegate never runs. */
+static void ghost_ios_start_blender_main(const char *origin)
+{
+  if (g_ios_startup_started) {
+    fprintf(stderr, "[ios] startup (%s) ignored: already started\n", origin);
+    fflush(stderr);
+    return;
+  }
+  g_ios_startup_started = YES;
+
+  /* Under the SwiftUI entry point GHOST_iosmain() never runs, so argc/argv
+   * were never captured. Build them from the process arguments. */
+  if (argv == nullptr || argc == 0) {
+    NSArray<NSString *> *process_args = [NSProcessInfo processInfo].arguments;
+    const int n = (int)process_args.count;
+    const char **fallback_argv = (const char **)calloc(n > 0 ? n : 1, sizeof(char *));
+    int count = 0;
+    for (NSString *arg in process_args) {
+      fallback_argv[count++] = strdup(arg.UTF8String);
+    }
+    if (count == 0) {
+      fallback_argv[0] = strdup("Blender");
+      count = 1;
+    }
+    argc = count;
+    argv = fallback_argv;
+  }
+
+  fprintf(stderr, "[ios] startup (%s): starting main_ios_callback argc=%d\n", origin, argc);
+  fflush(stderr);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    @try {
+      main_ios_callback(argc, argv);
+      ghost_ios_schedule_reactivation_burst();
+    }
+    @catch (NSException *exception) {
+      fprintf(stderr,
+              "[ios] main_ios_callback exception: %s - %s\n",
+              exception.name.UTF8String,
+              exception.reason.UTF8String);
+      fflush(stderr);
+      g_ios_startup_started = NO;
+    }
+  });
+}
+
+/* Called from the SwiftUI host view controller (BlenderVisionApp.swift) once its
+ * window is attached to a scene. */
+extern "C" void GHOST_IOS_StartBlenderFromSwiftUI(void)
+{
+  if (g_ios_active_window_scene == nil) {
+    g_ios_active_window_scene = ghost_ios_pick_active_window_scene();
+  }
+
+  /* IOSAppDelegate never runs under the SwiftUI lifecycle; register the
+   * reactivation observers it would normally install. */
+  static BOOL observers_installed = NO;
+  if (!observers_installed) {
+    observers_installed = YES;
+    for (NSNotificationName name in @[
+           UIApplicationWillEnterForegroundNotification,
+           UIApplicationDidBecomeActiveNotification,
+           UISceneWillEnterForegroundNotification,
+           UISceneDidActivateNotification
+         ])
+    {
+      [[NSNotificationCenter defaultCenter] addObserverForName:name
+                                                        object:nil
+                                                         queue:[NSOperationQueue mainQueue]
+                                                    usingBlock:^(NSNotification *note) {
+                                                      (void)note;
+                                                      ghost_ios_schedule_reactivation_burst();
+                                                    }];
+    }
+  }
+
+  ghost_ios_start_blender_main("swiftui");
+}
+
 @implementation IOSSceneDelegate
 
 - (void)scene:(UIScene *)scene
@@ -310,29 +394,7 @@ static void ghost_ios_schedule_reactivation_burst()
     ios_handle_incoming_document_url(url_context.URL);
   }
 
-  if (g_ios_startup_started) {
-    fprintf(stderr, "[ios] scene willConnect ignored: startup already started\n");
-    fflush(stderr);
-    return;
-  }
-  g_ios_startup_started = YES;
-
-  fprintf(stderr, "[ios] scene willConnect, starting main_ios_callback\n");
-  fflush(stderr);
-  dispatch_async(dispatch_get_main_queue(), ^{
-    @try {
-      main_ios_callback(argc, argv);
-      ghost_ios_schedule_reactivation_burst();
-    }
-    @catch (NSException *exception) {
-      fprintf(stderr,
-              "[ios] main_ios_callback exception: %s - %s\n",
-              exception.name.UTF8String,
-              exception.reason.UTF8String);
-      fflush(stderr);
-      g_ios_startup_started = NO;
-    }
-  });
+  ghost_ios_start_blender_main("scene willConnect");
 }
 
 - (void)sceneDidDisconnect:(UIScene *)scene
@@ -510,6 +572,7 @@ static void ghost_ios_schedule_reactivation_burst()
 
   /* Run the main loop to handle all events. */
   if (C) {
+    WM_ios_immersive_sync_active_object(C);
     WM_main_loop_body(C);
   }
 
@@ -1116,8 +1179,8 @@ uint8_t GHOST_SystemIOS::getNumDisplays() const
 
 void GHOST_SystemIOS::getMainDisplayDimensions(uint32_t &width, uint32_t &height) const
 {
-  CGRect screenRect = [[UIScreen mainScreen] bounds];
-  CGFloat scaling_fac = [UIScreen mainScreen].scale;
+  const CGRect screenRect = ghost_ios_default_bounds();
+  const CGFloat scaling_fac = ghost_ios_display_scale(nil);
   CGFloat screenWidth = screenRect.size.width * scaling_fac;
   CGFloat screenHeight = screenRect.size.height * scaling_fac;
 
@@ -1168,7 +1231,7 @@ GHOST_IWindow *GHOST_SystemIOS::createWindow(const char *title,
   @autoreleasepool {
 
     /* Create window at native size. */
-    CGRect bounds = [[UIScreen mainScreen] bounds];
+    CGRect bounds = ghost_ios_default_bounds();
 
     window = (GHOST_IWindow *)new GHOST_WindowIOS(this,
                                                   title,

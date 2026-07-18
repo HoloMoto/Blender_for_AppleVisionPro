@@ -259,9 +259,17 @@ else()
       set (CMAKE_FIND_LIBRARY_SUFFIXES ".dylib" ".so" ".a")
 
       # Set Crossplatform Apple-arm64 specific cmake flags with SDKs.
-      set(PLATFORM_CFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} ${APPLE_OS_MINVERSION_CFLAG} -Wno-declaration-after-statement -arch ${CMAKE_OSX_ARCHITECTURES}")
-      set(PLATFORM_CXXFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} ${APPLE_OS_MINVERSION_CFLAG} -std=c++17 -stdlib=libc++ -arch ${CMAKE_OSX_ARCHITECTURES}")
-      set(PLATFORM_LDFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} ${APPLE_OS_MINVERSION_CFLAG} -arch ${CMAKE_OSX_ARCHITECTURES}")
+      if(APPLE_TARGET_VISIONOS)
+        # visionOS requires -target arm64-apple-xros*; -arch arm64 + -mxros-version-min fails on autotools.
+        set(APPLE_CROSSPLATFORM_ARCH_FLAGS "-target arm64-apple-xros${CMAKE_OSX_DEPLOYMENT_TARGET}")
+        set(PLATFORM_CFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} ${APPLE_CROSSPLATFORM_ARCH_FLAGS} -Wno-declaration-after-statement")
+        set(PLATFORM_CXXFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} ${APPLE_CROSSPLATFORM_ARCH_FLAGS} -std=c++17 -stdlib=libc++")
+        set(PLATFORM_LDFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} ${APPLE_CROSSPLATFORM_ARCH_FLAGS}")
+      else()
+        set(PLATFORM_CFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} ${APPLE_OS_MINVERSION_CFLAG} -Wno-declaration-after-statement -arch ${CMAKE_OSX_ARCHITECTURES}")
+        set(PLATFORM_CXXFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} ${APPLE_OS_MINVERSION_CFLAG} -std=c++17 -stdlib=libc++ -arch ${CMAKE_OSX_ARCHITECTURES}")
+        set(PLATFORM_LDFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} ${APPLE_OS_MINVERSION_CFLAG} -arch ${CMAKE_OSX_ARCHITECTURES}")
+      endif()
       # Apple ARM64 target.
       set(PLATFORM_BUILD_TARGET --build=aarch64-apple-darwin20.0.0) 
 
@@ -298,7 +306,7 @@ else()
         -DCMAKE_STRIP:STRING=${CMAKE_STRIP}
       )
 
-      if(APPLE_TARGET_IOS)
+      if(APPLE_TARGET_IOS AND NOT APPLE_TARGET_VISIONOS)
         set(PLATFORM_CMAKE_FLAGS
           ${PLATFORM_CMAKE_FLAGS}
           -DCMAKE_IPHONEOS_DEPLOYMENT_TARGET:STRING=${CMAKE_OSX_DEPLOYMENT_TARGET}
@@ -310,61 +318,118 @@ else()
       
       # Prepare Meson cross file
       # Note: Cmake will issue a developer warning about the use of triple quotes but the code seems OK.
+      if(APPLE_TARGET_VISIONOS)
+        set(_meson_host_system visionos)
+      else()
+        set(_meson_host_system darwin)
+      endif()
+
       set(MESON_APPLE_CONFIGURATION_FILE ${BUILD_DIR}/apple_cp/meson_apple_cross_config.ini)
-      set(MESON_APPLE_CP_CONTENTS
-        """
-        [binaries]
-        c = 'clang'
-        cpp = 'clang++'
-        objc = 'clang'
-        objcpp = 'clang++'
-        ar = 'ar'
-        strip = 'strip'
-        ld = 'ld'
-        pkgconfig = 'pkg-config'
+      if(APPLE_TARGET_VISIONOS)
+        set(MESON_APPLE_CP_CONTENTS
+          """
+          [binaries]
+          c = 'clang'
+          cpp = 'clang++'
+          objc = 'clang'
+          objcpp = 'clang++'
+          ar = 'ar'
+          strip = 'strip'
+          ld = 'ld'
+          pkgconfig = 'pkg-config'
 
-        [built-in options]
-        c_args = [
-          '-arch', 'arm64',
-          '-isysroot', '${CMAKE_OSX_SYSROOT}',
-          '${APPLE_OS_MINVERSION_CFLAG}',
-          '-fembed-bitcode']
+          [built-in options]
+          c_args = [
+            '-target', 'arm64-apple-xros${CMAKE_OSX_DEPLOYMENT_TARGET}',
+            '-isysroot', '${CMAKE_OSX_SYSROOT}',
+            '-fembed-bitcode']
 
-        cpp_args = [
-          '-arch', 'arm64',
-          '-isysroot', '${CMAKE_OSX_SYSROOT}',
-          '${APPLE_OS_MINVERSION_CFLAG}',
-          '-fembed-bitcode']
+          cpp_args = [
+            '-target', 'arm64-apple-xros${CMAKE_OSX_DEPLOYMENT_TARGET}',
+            '-isysroot', '${CMAKE_OSX_SYSROOT}',
+            '-fembed-bitcode']
 
-        objc_args = [
-          '-arch', 'arm64',
-          '-isysroot', '${CMAKE_OSX_SYSROOT}',
-          '${APPLE_OS_MINVERSION_CFLAG}',
-          '-fembed-bitcode']
+          objc_args = [
+            '-target', 'arm64-apple-xros${CMAKE_OSX_DEPLOYMENT_TARGET}',
+            '-isysroot', '${CMAKE_OSX_SYSROOT}',
+            '-fembed-bitcode']
 
-        objcpp_args = [
-          '-arch', 'arm64',
-          '-isysroot', '${CMAKE_OSX_SYSROOT}',
-          '${APPLE_OS_MINVERSION_CFLAG}',
-          '-fembed-bitcode']
+          objcpp_args = [
+            '-target', 'arm64-apple-xros${CMAKE_OSX_DEPLOYMENT_TARGET}',
+            '-isysroot', '${CMAKE_OSX_SYSROOT}',
+            '-fembed-bitcode']
 
-        c_link_args = [
-          '-arch', 'arm64',
-          '-isysroot', '${CMAKE_OSX_SYSROOT}',
-          '${APPLE_OS_MINVERSION_CFLAG}']
+          c_link_args = [
+            '-target', 'arm64-apple-xros${CMAKE_OSX_DEPLOYMENT_TARGET}',
+            '-isysroot', '${CMAKE_OSX_SYSROOT}']
 
-        cpp_link_args = [
-          '-arch', 'arm64',
-          '-isysroot', '${CMAKE_OSX_SYSROOT}',
-          '${APPLE_OS_MINVERSION_CFLAG}']
-        
-        [host_machine]
-        system = 'darwin'
-        cpu_family = 'aarch64'
-        cpu = 'arm64'
-        endian = 'little'
-        """
-      )
+          cpp_link_args = [
+            '-target', 'arm64-apple-xros${CMAKE_OSX_DEPLOYMENT_TARGET}',
+            '-isysroot', '${CMAKE_OSX_SYSROOT}']
+          
+          [host_machine]
+          system = '${_meson_host_system}'
+          cpu_family = 'aarch64'
+          cpu = 'arm64'
+          endian = 'little'
+          """
+        )
+      else()
+        set(MESON_APPLE_CP_CONTENTS
+          """
+          [binaries]
+          c = 'clang'
+          cpp = 'clang++'
+          objc = 'clang'
+          objcpp = 'clang++'
+          ar = 'ar'
+          strip = 'strip'
+          ld = 'ld'
+          pkgconfig = 'pkg-config'
+
+          [built-in options]
+          c_args = [
+            '-arch', 'arm64',
+            '-isysroot', '${CMAKE_OSX_SYSROOT}',
+            '${APPLE_OS_MINVERSION_CFLAG}',
+            '-fembed-bitcode']
+
+          cpp_args = [
+            '-arch', 'arm64',
+            '-isysroot', '${CMAKE_OSX_SYSROOT}',
+            '${APPLE_OS_MINVERSION_CFLAG}',
+            '-fembed-bitcode']
+
+          objc_args = [
+            '-arch', 'arm64',
+            '-isysroot', '${CMAKE_OSX_SYSROOT}',
+            '${APPLE_OS_MINVERSION_CFLAG}',
+            '-fembed-bitcode']
+
+          objcpp_args = [
+            '-arch', 'arm64',
+            '-isysroot', '${CMAKE_OSX_SYSROOT}',
+            '${APPLE_OS_MINVERSION_CFLAG}',
+            '-fembed-bitcode']
+
+          c_link_args = [
+            '-arch', 'arm64',
+            '-isysroot', '${CMAKE_OSX_SYSROOT}',
+            '${APPLE_OS_MINVERSION_CFLAG}']
+
+          cpp_link_args = [
+            '-arch', 'arm64',
+            '-isysroot', '${CMAKE_OSX_SYSROOT}',
+            '${APPLE_OS_MINVERSION_CFLAG}']
+          
+          [host_machine]
+          system = '${_meson_host_system}'
+          cpu_family = 'aarch64'
+          cpu = 'arm64'
+          endian = 'little'
+          """
+        )
+      endif()
       file(WRITE ${MESON_APPLE_CONFIGURATION_FILE} ${MESON_APPLE_CP_CONTENTS})
       
     else()
@@ -429,6 +494,8 @@ else()
 endif()
 
 set(DEFAULT_CMAKE_FLAGS
+  # CMake 4.x removed compatibility with cmake_minimum_required < 3.5 in dependencies.
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5
   -DCMAKE_BUILD_TYPE=${BUILD_MODE}
   -DCMAKE_C_FLAGS_DEBUG=${BLENDER_CMAKE_C_FLAGS_DEBUG}
   -DCMAKE_C_FLAGS_MINSIZEREL=${BLENDER_CMAKE_C_FLAGS_MINSIZEREL}

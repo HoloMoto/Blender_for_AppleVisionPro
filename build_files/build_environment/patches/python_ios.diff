@@ -127,7 +127,7 @@ index a97a755..07ce853 100644
  #endif  /* ! __WATCOMC__ || __QNX__ */
  
 +#ifdef __APPLE__
-+#  if TARGET_OS_IOS
++#  if TARGET_OS_IOS || TARGET_OS_VISION
 +#    undef HAVE_SYSTEM
 +#    undef HAVE_SENDFILE
 +#  else

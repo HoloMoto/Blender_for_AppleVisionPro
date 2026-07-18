@@ -16,11 +16,15 @@
 #include "GHOST_EventTouch.hh"
 #include "GHOST_EventTrackpad.hh"
 
+#include "GHOST_IOSVisionCompat.h"
+
 #import <GameController/GameController.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
-#import <UIKit/UIPencilInteraction.h>
+#if !TARGET_OS_VISION
+#  import <UIKit/UIPencilInteraction.h>
+#endif
 
 #include <algorithm>
 #include <unordered_map>
@@ -230,7 +234,12 @@ typedef struct UserInputEvent {
 @end
 
 /* GHOSTUIWindow interface. */
-@interface GHOSTUIWindow : UIWindow <UIGestureRecognizerDelegate, UIPencilInteractionDelegate>
+@interface GHOSTUIWindow : UIWindow <UIGestureRecognizerDelegate
+#if !TARGET_OS_VISION
+                                       ,
+                                       UIPencilInteractionDelegate
+#endif
+                                       >
 {
   GHOST_SystemIOS *system;
   GHOST_WindowIOS *window;
@@ -245,9 +254,11 @@ typedef struct UserInputEvent {
   GHOSTUIHoverGestureRecognizer *hover_gesture_recognizer;
   GHOSTUIHoverGestureRecognizer *pointer_hover_gesture_recognizer;
   UIPanGestureRecognizer *pointer_scroll_gesture_recognizer;
+#if !TARGET_OS_VISION
   UIPencilInteraction *pencil_interaction;
   UIScreenEdgePanGestureRecognizer *edge_swipe_left;
   UIScreenEdgePanGestureRecognizer *edge_swipe_right;
+#endif
   // GHOSTUILongPressGestureRecognizer *long_press_gesture_recognizer;
 
   /* Data from the Apple pencil */
@@ -437,6 +448,7 @@ typedef struct UserInputEvent {
   zoom_gesture_recognizer.cancelsTouchesInView = false;
   [window->getView() addGestureRecognizer:zoom_gesture_recognizer];
 
+#if !TARGET_OS_VISION
   /* Edge swipe. */
   edge_swipe_left = [[UIScreenEdgePanGestureRecognizer alloc]
       initWithTarget:self
@@ -451,6 +463,7 @@ typedef struct UserInputEvent {
   edge_swipe_right.edges = UIRectEdgeRight;
   edge_swipe_right.delegate = self;
   [window->getView() addGestureRecognizer:edge_swipe_right];
+#endif
 
   /* Apple Pencil hover recognizer. */
   hover_gesture_recognizer = [[GHOSTUIHoverGestureRecognizer alloc]
@@ -482,10 +495,12 @@ typedef struct UserInputEvent {
   [window->getView() addGestureRecognizer:pointer_scroll_gesture_recognizer];
   current_pencil_touch = nil;
 
+#if !TARGET_OS_VISION
   /**  Apple Pencil double-tap. */
   pencil_interaction = [[UIPencilInteraction alloc] init];
   pencil_interaction.delegate = self;
   [window->getView() addInteraction:pencil_interaction];
+#endif
 }
 
 /* Turn the user inputs into Blender events.
@@ -950,6 +965,7 @@ typedef struct UserInputEvent {
   }
 }
 
+#if !TARGET_OS_VISION
 - (void)handleEdgeSwipe:(UIScreenEdgePanGestureRecognizer *)gesture
 {
   if (gesture.state != UIGestureRecognizerStateEnded) {
@@ -976,6 +992,16 @@ typedef struct UserInputEvent {
   system->pushEvent(new GHOST_EventTouch(
       system->getMilliSeconds(), window, ghostEventType, location.x, location.y));
 }
+#endif
+
+#if !TARGET_OS_VISION
+- (void)pencilInteractionDidTap:(UIPencilInteraction *)interaction
+{
+  UserInputEvent event_info(nullptr, nullptr, nullptr, true);
+  event_info.add_event(UserInputEvent::EventTypes::PENCIL_TAP);
+  [self generateUserInputEvents:event_info];
+}
+#endif
 
 - (void)handlePointerHover:(GHOSTUIHoverGestureRecognizer *)sender
 {
@@ -1089,13 +1115,6 @@ typedef struct UserInputEvent {
            sender.state == UIGestureRecognizerStateFailed)
   {
   }
-}
-
-- (void)pencilInteractionDidTap:(UIPencilInteraction *)interaction
-{
-  UserInputEvent event_info(nullptr, nullptr, nullptr, true);
-  event_info.add_event(UserInputEvent::EventTypes::PENCIL_TAP);
-  [self generateUserInputEvents:event_info];
 }
 
 - (void)beginFrame
@@ -1269,7 +1288,9 @@ typedef struct UserInputEvent {
 
     if (toolbar_enabled) {
       [self initToolbar];
+#if !TARGET_OS_VISION
       text_field.inputAccessoryView = toolbar;
+#endif
     }
 
     [window->rootWindow addSubview:text_field];
@@ -1885,10 +1906,10 @@ typedef struct UserInputEvent {
   _view.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
   _view.autoResizeDrawable = YES;
   _view.contentMode = UIViewContentModeScaleToFill;
-  _view.contentScaleFactor = [[UIScreen mainScreen] scale];
+  _view.contentScaleFactor = ghost_ios_display_scale(_view);
   /* Set the refresh rate to the screen's maximum. There may be some value in capping
    * this value to preserve battery life (60fps seems to work well). */
-  _view.preferredFramesPerSecond = [UIScreen mainScreen].maximumFramesPerSecond;
+  _view.preferredFramesPerSecond = ghost_ios_maximum_frames_per_second(_view);
   _renderer = [[GHOST_IOSMetalRenderer alloc] initWithMetalKitView:_view];
   if (!_renderer) {
     NSLog(@"Renderer initialization failed");
@@ -1989,7 +2010,7 @@ GHOST_WindowIOS::GHOST_WindowIOS(GHOST_SystemIOS *system_ios,
       ghost_rootWindow = [[GHOSTUIWindow alloc] init];
       [ghost_rootWindow retain];
       /* Ensure fullscreen. */
-      CGRect rect = [UIScreen mainScreen].bounds;
+      CGRect rect = ghost_ios_default_bounds();
       ghost_rootWindow.frame = rect;
     }
     else {
@@ -2204,7 +2225,7 @@ void GHOST_WindowIOS::getWindowBounds(GHOST_Rect &bounds) const
   GHOST_ASSERT(getValid(), "GHOST_WindowIOS::getWindowBounds(): window invalid");
 
   CGRect screenRect = rootWindow.frame;
-  CGFloat scale = [UIScreen mainScreen].scale;
+  CGFloat scale = ghost_ios_display_scale((UIView *)rootWindow);
   CGFloat screenWidth = screenRect.size.width * scale;
   CGFloat screenHeight = screenRect.size.height * scale;
 
@@ -2219,7 +2240,7 @@ void GHOST_WindowIOS::getClientBounds(GHOST_Rect &bounds) const
   GHOST_ASSERT(getValid(), "GHOST_WindowIOS::getWindowBounds(): window invalid");
 
   CGRect screenRect = rootWindow.frame;
-  CGFloat scale = [UIScreen mainScreen].scale;
+  CGFloat scale = ghost_ios_display_scale((UIView *)rootWindow);
   CGFloat screenWidth = screenRect.size.width * scale;
   CGFloat screenHeight = screenRect.size.height * scale;
 
@@ -2467,7 +2488,7 @@ CGSize GHOST_WindowIOS::getNativeWindowSize()
 
 float GHOST_WindowIOS::getWindowScaleFactor()
 {
-  return [[UIScreen mainScreen] scale];
+  return ghost_ios_display_scale((UIView *)rootWindow);
 }
 
 /* Indicate that we want this window to be the next active one. */

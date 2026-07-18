@@ -85,10 +85,20 @@ Must be built with the same WITH_* feature flags as the iOS target (see build_io
   add_executable(makesrna IMPORTED GLOBAL)
   add_executable(datatoc IMPORTED GLOBAL)
   add_executable(glsl_preprocess IMPORTED GLOBAL)
-  set_property(TARGET makesdna PROPERTY IMPORTED_LOCATION "${BLENDER_IOS_HOST_TOOLS_DIR}/makesdna")
-  set_property(TARGET makesrna PROPERTY IMPORTED_LOCATION "${BLENDER_IOS_HOST_TOOLS_DIR}/makesrna")
-  set_property(TARGET datatoc PROPERTY IMPORTED_LOCATION "${BLENDER_IOS_HOST_TOOLS_DIR}/datatoc")
-  set_property(TARGET glsl_preprocess PROPERTY IMPORTED_LOCATION "${BLENDER_IOS_HOST_TOOLS_DIR}/glsl_preprocess")
+  # Set per-config locations too: with CMAKE_MAP_IMPORTED_CONFIG_* mapping
+  # Debug/RelWithDebInfo/MinSizeRel to Release, $<TARGET_FILE:...> resolves to
+  # "<tool>-NOTFOUND" in non-Release Xcode configurations unless the mapped
+  # config has an explicit location.
+  foreach(_host_tool makesdna makesrna datatoc glsl_preprocess)
+    set_target_properties(${_host_tool} PROPERTIES
+      IMPORTED_LOCATION "${BLENDER_IOS_HOST_TOOLS_DIR}/${_host_tool}"
+      IMPORTED_LOCATION_RELEASE "${BLENDER_IOS_HOST_TOOLS_DIR}/${_host_tool}"
+      IMPORTED_LOCATION_DEBUG "${BLENDER_IOS_HOST_TOOLS_DIR}/${_host_tool}"
+      IMPORTED_LOCATION_RELWITHDEBINFO "${BLENDER_IOS_HOST_TOOLS_DIR}/${_host_tool}"
+      IMPORTED_LOCATION_MINSIZEREL "${BLENDER_IOS_HOST_TOOLS_DIR}/${_host_tool}"
+    )
+  endforeach()
+  unset(_host_tool)
 
   add_executable(msgfmt IMPORTED GLOBAL)
   set(_blender_ios_msgfmt_path "")
@@ -133,6 +143,16 @@ Must be built with the same WITH_* feature flags as the iOS target (see build_io
   endif()
   unset(_blender_ios_msgfmt_path)
 
+  # Mirror the resolved msgfmt location to all configurations (see host tools above).
+  get_target_property(_blender_ios_msgfmt_loc msgfmt IMPORTED_LOCATION)
+  set_target_properties(msgfmt PROPERTIES
+    IMPORTED_LOCATION_RELEASE "${_blender_ios_msgfmt_loc}"
+    IMPORTED_LOCATION_DEBUG "${_blender_ios_msgfmt_loc}"
+    IMPORTED_LOCATION_RELWITHDEBINFO "${_blender_ios_msgfmt_loc}"
+    IMPORTED_LOCATION_MINSIZEREL "${_blender_ios_msgfmt_loc}"
+  )
+  unset(_blender_ios_msgfmt_loc)
+
   message(STATUS "iOS host tools directory: ${BLENDER_IOS_HOST_TOOLS_DIR}")
   if(BLENDER_IOS_HOST_TOOLS_DIR MATCHES "build_darwin_clean")
     message(
@@ -152,6 +172,13 @@ Must be built with the same WITH_* feature flags as the iOS target (see build_io
     endif()
   endforeach()
   unset(_host_tool)
+
+  # iOS/visionOS prebuilt dependency packages usually ship only one binary variant.
+  # Map Debug/RelWithDebInfo/MinSizeRel lookups to Release to avoid invalid
+  # Xcode search paths like ".../Debug-xros" for imported package targets.
+  set(CMAKE_MAP_IMPORTED_CONFIG_DEBUG Release CACHE STRING "" FORCE)
+  set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release CACHE STRING "" FORCE)
+  set(CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL Release CACHE STRING "" FORCE)
 else()
   # Disable cross-compiled tools (glsl_preprocess, makesdna, makesrna etc.) if building on host.
   set(WITH_CROSSCOMPILED_TOOLS OFF CACHE BOOL "" FORCE)
@@ -190,9 +217,13 @@ endif()
 if(NOT DEFINED LIBDIR)
   if(WITH_APPLE_CROSSPLATFORM)
     if(APPLE_TARGET_DEVICE STREQUAL "visionos")
-      # Reuse iOS arm64 prebuilts until a dedicated visionOS lib tree exists.
-      set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/ios_${CMAKE_OSX_ARCHITECTURES})
-      message(STATUS "visionOS build: using LIBDIR ${LIBDIR} (temporary)")
+      set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/visionos_${CMAKE_OSX_ARCHITECTURES})
+      if(NOT EXISTS "${LIBDIR}")
+        message(FATAL_ERROR
+          "visionOS build requires pre-compiled libs at: '${LIBDIR}'. "
+          "Build them with: make deps visionos")
+      endif()
+      message(STATUS "visionOS build: using LIBDIR ${LIBDIR}")
     else()
       set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/${APPLE_TARGET_DEVICE}_${CMAKE_OSX_ARCHITECTURES})
     endif()
@@ -723,6 +754,11 @@ string(APPEND PLATFORM_LINKFLAGS_EXECUTABLE " -Wl,-stack_size,0x100000")
 # Suppress ranlib "has no symbols" warnings (workaround for #48250).
 set(CMAKE_C_ARCHIVE_CREATE   "<CMAKE_AR> Scr <TARGET> <LINK_FLAGS> <OBJECTS>")
 set(CMAKE_CXX_ARCHIVE_CREATE "<CMAKE_AR> Scr <TARGET> <LINK_FLAGS> <OBJECTS>")
+# Xcode uses libtool for static libraries; stub translation units (CUDA, Windows,
+# header-only .inl includes, etc.) otherwise fail the archive step.
+if(CMAKE_GENERATOR STREQUAL "Xcode")
+  set(CMAKE_XCODE_ATTRIBUTE_OTHER_LIBTOOLFLAGS "-no_warning_for_no_symbols")
+endif()
 # llvm-ranlib doesn't support this flag. Xcode's libtool does.
 if(NOT ${CMAKE_RANLIB} MATCHES ".*llvm-ranlib$")
   set(CMAKE_C_ARCHIVE_FINISH   "<CMAKE_RANLIB> -no_warning_for_no_symbols -c <TARGET>")

@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <sstream>
 
 #include <fmt/format.h>
@@ -93,6 +94,7 @@
 #include "ED_view3d.hh"
 
 #include "DEG_depsgraph_query.hh"
+#include "DEG_depsgraph.hh"
 
 #include "RNA_access.hh"
 #include "RNA_define.hh"
@@ -4206,9 +4208,209 @@ static void WM_OT_stereo3d_set(wmOperatorType *ot)
  * \{ */
 
 #if defined(WITH_APPLE_CROSSPLATFORM)
+struct WMIOSImmersivePendingMove {
+  std::mutex mutex;
+  std::string object_name;
+  float z = 0.0f;
+  bool pending = false;
+};
+
+static WMIOSImmersivePendingMove g_wm_ios_immersive_pending_move;
+
+/**
+ * Called by BlenderImmersiveSpaceView.swift while dragging an entity. Queue the
+ * change instead of touching Blender DNA from SwiftUI/RealityKit callbacks.
+ */
+extern "C" void WM_IOS_immersive_set_object_z(const char *object_name, const float z)
+{
+  if (object_name == nullptr || object_name[0] == '\0') {
+    return;
+  }
+  std::lock_guard lock(g_wm_ios_immersive_pending_move.mutex);
+  g_wm_ios_immersive_pending_move.object_name = object_name;
+  g_wm_ios_immersive_pending_move.z = z;
+  g_wm_ios_immersive_pending_move.pending = true;
+}
+
+static bool wm_ios_immersive_export_scene(bContext *C,
+                                          const char *usdz_path,
+                                          const bool show_error)
+{
+  wmOperatorType *ot = WM_operatortype_find("WM_OT_usd_export", true);
+  if (ot == nullptr) {
+    if (show_error) {
+      GHOST_IOS_show_native_alert(
+          "Immersive Space",
+          "USD export is not available in this build. Enable WITH_USD and rebuild.");
+    }
+    return false;
+  }
+
+  if (BLI_exists(usdz_path)) {
+    BLI_delete(usdz_path, false, false);
+  }
+
+  PointerRNA props_ptr;
+  WM_operator_properties_create_ptr(&props_ptr, ot);
+  RNA_string_set(&props_ptr, "filepath", usdz_path);
+  RNA_boolean_set(&props_ptr, "visible_objects_only", true);
+  RNA_boolean_set(&props_ptr, "selected_objects_only", false);
+  RNA_boolean_set(&props_ptr, "export_materials", true);
+  RNA_boolean_set(&props_ptr, "export_meshes", true);
+  RNA_boolean_set(&props_ptr, "generate_preview_surface", true);
+  /* Preserve physical dimensions: USD is authored with one unit per meter. */
+  RNA_float_set(&props_ptr, "meters_per_unit", 1.0f);
+  /* Viewport evaluation: the render depsgraph reads the original mesh datablock,
+   * which does not include live edit-mode changes until leaving edit mode. */
+  RNA_enum_set(&props_ptr, "evaluation_mode", DAG_EVAL_VIEWPORT);
+
+  const wmOperatorStatus export_status = WM_operator_name_call_ptr(
+      C, ot, blender::wm::OpCallContext::ExecDefault, &props_ptr, nullptr);
+  WM_operator_properties_free(&props_ptr);
+
+  const bool ok = (export_status & OPERATOR_FINISHED) && BLI_exists(usdz_path);
+  if (!ok && show_error) {
+    GHOST_IOS_show_native_alert(
+        "Immersive Space", "Could not export the current scene to USDZ for Immersive Space.");
+  }
+  return ok;
+}
+
+static void wm_ios_immersive_sync_impl(bContext *C)
+{
+  Object *ob = CTX_data_active_object(C);
+
+  /* Heartbeat so the on-device log shows what the sync loop can see. */
+  {
+    static double last_log_time = 0.0;
+    const double log_now = BLI_time_now_seconds();
+    if (log_now - last_log_time >= 2.0) {
+      last_log_time = log_now;
+      fprintf(stderr,
+              "[immersive] sync alive: ob=%s mode=%d\n",
+              ob ? ob->id.name + 2 : "(none)",
+              ob ? ob->mode : -1);
+      fflush(stderr);
+    }
+  }
+
+  if (ob == nullptr) {
+    return;
+  }
+
+  std::string pending_name;
+  float pending_z = 0.0f;
+  {
+    std::lock_guard lock(g_wm_ios_immersive_pending_move.mutex);
+    if (g_wm_ios_immersive_pending_move.pending) {
+      pending_name = g_wm_ios_immersive_pending_move.object_name;
+      pending_z = g_wm_ios_immersive_pending_move.z;
+      g_wm_ios_immersive_pending_move.pending = false;
+    }
+  }
+
+  const char *object_name = ob->id.name + 2;
+  if (!pending_name.empty() && pending_name == object_name && ob->loc[2] != pending_z) {
+    ob->loc[2] = pending_z;
+    DEG_id_tag_update(&ob->id, ID_RECALC_TRANSFORM);
+    WM_event_add_notifier(C, NC_OBJECT | ND_TRANSFORM, ob);
+  }
+
+  static std::string last_object_name;
+  static float last_location[3] = {0.0f, 0.0f, 0.0f};
+  if (last_object_name != object_name || last_location[0] != ob->loc[0] ||
+      last_location[1] != ob->loc[1] || last_location[2] != ob->loc[2])
+  {
+    last_object_name = object_name;
+    copy_v3_v3(last_location, ob->loc);
+    GHOST_IOS_immersive_update_active_object(
+        object_name, ob->loc[0], ob->loc[1], ob->loc[2]);
+  }
+
+  /* Edit-mode topology/vertex changes cannot be represented by transform
+   * updates. Re-export the USDZ after a short debounce and ask RealityKit to
+   * reload it. This is intentionally limited to edit mode; object transforms
+   * continue to use the fast path above. */
+  if (ob->mode & OB_MODE_EDIT) {
+    Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C);
+    static uint64_t last_update_count = 0;
+    static uint64_t pending_update_count = 0;
+    static double last_export_time = 0.0;
+    const uint64_t update_count = depsgraph ? DEG_get_update_count(depsgraph) : 0;
+    if (update_count != last_update_count) {
+      last_update_count = update_count;
+      pending_update_count = update_count;
+    }
+
+    const double now = BLI_time_now_seconds();
+
+    /* Heartbeat so the on-device log shows this branch is reached. */
+    static double last_log_time = 0.0;
+    if (now - last_log_time >= 2.0) {
+      last_log_time = now;
+      fprintf(stderr,
+              "[immersive] edit sync alive: depsgraph=%d update_count=%llu pending=%llu\n",
+              depsgraph != nullptr,
+              (unsigned long long)update_count,
+              (unsigned long long)pending_update_count);
+      fflush(stderr);
+    }
+    if (pending_update_count != 0 && (now - last_export_time) >= 0.25) {
+      static uint64_t refresh_serial = 0;
+      char filename[64];
+      SNPRINTF(filename, "immersive_preview_%llu.usdz", (unsigned long long)++refresh_serial);
+      char usdz_path[FILE_MAX];
+      BLI_path_join(usdz_path, sizeof(usdz_path), BKE_tempdir_session(), filename);
+      if (wm_ios_immersive_export_scene(C, usdz_path, false)) {
+        GHOST_IOS_immersive_reload_model(usdz_path);
+        last_export_time = now;
+        last_update_count = depsgraph ? DEG_get_update_count(depsgraph) : last_update_count;
+        pending_update_count = 0;
+        fprintf(stderr, "[immersive] geometry refreshed\n");
+        fflush(stderr);
+      }
+    }
+  }
+}
+
+/**
+ * Runs from the regular Blender/Metal draw loop. Apply queued RealityKit input
+ * on Blender's main loop, then publish active-object location changes back to Swift.
+ */
+void WM_ios_immersive_sync_active_object(bContext *C)
+{
+  if (C == nullptr || !GHOST_IOS_immersive_mode_is_active()) {
+    return;
+  }
+
+  wmWindowManager *wm = CTX_wm_manager(C);
+  if (wm == nullptr) {
+    return;
+  }
+
+  /* The main loop clears the context window at the end of every iteration, so
+   * this draw-loop callback usually starts with no window/screen in context.
+   * Without them #CTX_data_active_object and the USD export operator poll both
+   * fail, which silently disabled all immersive syncing. */
+  wmWindow *win_prev = CTX_wm_window(C);
+  if (win_prev == nullptr) {
+    wmWindow *win = static_cast<wmWindow *>(wm->windows.first);
+    if (win == nullptr) {
+      return;
+    }
+    CTX_wm_window_set(C, win);
+  }
+
+  wm_ios_immersive_sync_impl(C);
+
+  if (win_prev == nullptr) {
+    CTX_wm_window_set(C, nullptr);
+  }
+}
+
 static bool wm_ios_immersive_poll(bContext *C)
 {
-  return WM_operator_winactive(C) && GHOST_IOS_immersive_space_is_supported();
+  return WM_operator_winactive(C);
 }
 
 static wmOperatorStatus wm_ios_immersive_toggle_exec(bContext *C, wmOperator * /*op*/)
@@ -4216,9 +4418,12 @@ static wmOperatorStatus wm_ios_immersive_toggle_exec(bContext *C, wmOperator * /
   if (!GHOST_IOS_immersive_space_is_supported()) {
     GHOST_IOS_show_native_alert(
         "Immersive Space",
-        "This feature requires a native visionOS (Apple Vision Pro) build. "
-        "Use APPLE_TARGET_DEVICE=visionos with WITH_VISIONOS_IMMERSIVE_SPACE=ON. "
-        "iPad AR preview is on the ipad-mr branch.");
+        "This build is not a native visionOS Immersive Space build.\n\n"
+        "Reconfigure with:\n"
+        "  -DAPPLE_TARGET_DEVICE=visionos\n"
+        "  -DWITH_VISIONOS_IMMERSIVE_SPACE=ON\n\n"
+        "Current iOS/iPad builds deploy to Vision Pro in compatibility mode "
+        "and cannot open Immersive Space. Use branch immersive-space.");
     return OPERATOR_CANCELLED;
   }
 
@@ -4231,39 +4436,9 @@ static wmOperatorStatus wm_ios_immersive_toggle_exec(bContext *C, wmOperator * /
   }
 
   char usdz_path[FILE_MAX] = "";
-  {
-    wmOperatorType *ot = WM_operatortype_find("WM_OT_usd_export", true);
-    if (ot == nullptr) {
-      GHOST_IOS_show_native_alert(
-          "Immersive Space",
-          "USD export is not available in this build. Enable WITH_USD and rebuild.");
-      return OPERATOR_CANCELLED;
-    }
-
-    BLI_path_join(usdz_path, sizeof(usdz_path), BKE_tempdir_session(), "immersive_preview.usdz");
-    if (BLI_exists(usdz_path)) {
-      BLI_delete(usdz_path, false, false);
-    }
-
-    PointerRNA props_ptr;
-    WM_operator_properties_create_ptr(&props_ptr, ot);
-    RNA_string_set(&props_ptr, "filepath", usdz_path);
-    RNA_boolean_set(&props_ptr, "visible_objects_only", true);
-    RNA_boolean_set(&props_ptr, "selected_objects_only", false);
-    RNA_boolean_set(&props_ptr, "export_materials", true);
-    RNA_boolean_set(&props_ptr, "export_meshes", true);
-    RNA_boolean_set(&props_ptr, "generate_preview_surface", true);
-
-    const wmOperatorStatus export_status = WM_operator_name_call_ptr(
-        C, ot, blender::wm::OpCallContext::ExecDefault, &props_ptr, nullptr);
-    WM_operator_properties_free(&props_ptr);
-
-    if (!(export_status & OPERATOR_FINISHED) || !BLI_exists(usdz_path)) {
-      GHOST_IOS_show_native_alert(
-          "Immersive Space",
-          "Could not export the current scene to USDZ for Immersive Space.");
-      return OPERATOR_CANCELLED;
-    }
+  BLI_path_join(usdz_path, sizeof(usdz_path), BKE_tempdir_session(), "immersive_preview.usdz");
+  if (!wm_ios_immersive_export_scene(C, usdz_path, true)) {
+    return OPERATOR_CANCELLED;
   }
 
   if (!GHOST_IOS_set_immersive_mode_enabled(true, usdz_path)) {

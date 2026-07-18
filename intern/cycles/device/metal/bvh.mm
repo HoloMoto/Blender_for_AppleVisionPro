@@ -297,7 +297,7 @@ bool BVHMetal::build_BLAS_mesh(Progress &progress,
                           MTLAccelerationStructureUsagePreferFastBuild);
     }
 #  if defined(MAC_OS_VERSION_26_0) || defined(IPHONE_OS_VERSION_26_0)
-    else if (@available(macos 26.0, ios 26.0, *)) {
+    else if (@available(macos 26.0, ios 26.0, visionos 26.0, *)) {
       accelDesc.usage |= MTLAccelerationStructureUsagePreferFastIntersection;
     }
 #  endif
@@ -642,7 +642,7 @@ bool BVHMetal::build_BLAS_hair(Progress &progress,
                           MTLAccelerationStructureUsagePreferFastBuild);
     }
 #    if defined(MAC_OS_VERSION_26_0) || defined(IPHONE_OS_VERSION_26_0)
-    else if (@available(macos 26.0, ios 26.0, *)) {
+    else if (@available(macos 26.0, ios 26.0, visionos 26.0, *)) {
       accelDesc.usage |= MTLAccelerationStructureUsagePreferFastIntersection;
     }
 #    endif
@@ -878,7 +878,7 @@ bool BVHMetal::build_BLAS_pointcloud(Progress &progress,
                           MTLAccelerationStructureUsagePreferFastBuild);
     }
 #  if defined(MAC_OS_VERSION_26_0) || defined(IPHONE_OS_VERSION_26_0)
-    else if (@available(macos 26.0, ios 26.0, *)) {
+    else if (@available(macos 26.0, ios 26.0, visionos 26.0, *)) {
       accelDesc.usage |= MTLAccelerationStructureUsagePreferFastIntersection;
     }
 #  endif
@@ -1340,7 +1340,7 @@ bool BVHMetal::build_TLAS(Progress &progress,
       accelDesc.motionTransformBuffer = motion_transforms_buf;
       accelDesc.motionTransformCount = num_motion_transforms;
 #  if defined(MAC_OS_VERSION_15_0)
-      if (@available(macos 15.0, ios 18.00, *)) {
+      if (@available(macos 15.0, ios 18.00, visionos 2.1, *)) {
         accelDesc.motionTransformStride = 0;
         accelDesc.motionTransformType = use_pcmi ? MTLTransformTypeComponent :
                                                    MTLTransformTypePackedFloat4x3;
@@ -1356,7 +1356,7 @@ bool BVHMetal::build_TLAS(Progress &progress,
                           MTLAccelerationStructureUsagePreferFastBuild);
     }
 #  if defined(MAC_OS_VERSION_26_0) || defined(IPHONE_OS_VERSION_26_0)
-    else if (@available(macos 26.0, ios 26.0, *)) {
+    else if (@available(macos 26.0, ios 26.0, visionos 26.0, *)) {
       accelDesc.usage |= MTLAccelerationStructureUsagePreferFastIntersection;
     }
 #  endif

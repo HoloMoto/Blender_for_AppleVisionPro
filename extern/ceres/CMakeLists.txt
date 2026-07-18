@@ -383,4 +383,19 @@ endif()
 add_definitions(${GFLAGS_DEFINES})
 add_definitions(${GLOG_DEFINES})
 
+# Xcode libtool fails when archiving preprocessor-disabled translation units
+# (CUDA / SuiteSparse / Accelerate stubs) on iOS and visionOS.
+if(WITH_APPLE_CROSSPLATFORM)
+  list(REMOVE_ITEM SRC
+    internal/ceres/accelerate_sparse.cc
+    internal/ceres/cuda_block_sparse_crs_view.cc
+    internal/ceres/cuda_block_structure.cc
+    internal/ceres/cuda_partitioned_block_sparse_crs_view.cc
+    internal/ceres/cuda_sparse_matrix.cc
+    internal/ceres/cuda_vector.cc
+    internal/ceres/float_suitesparse.cc
+    internal/ceres/suitesparse.cc
+  )
+endif()
+
 blender_add_lib(extern_ceres "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")

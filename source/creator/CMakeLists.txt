@@ -345,6 +345,14 @@ else()
     set(storyboards ${OSX_APP_SOURCEDIR}/Main.storyboard)
 
     add_executable(blender ${EXETYPE} ${SRC} ${storyboards})
+    if(APPLE_TARGET_DEVICE STREQUAL "visionos")
+      # Xcode recognizes .xcassets sources and compiles them with actool.
+      set(BLENDER_VISIONOS_ASSET_CATALOG ${OSX_APP_SOURCEDIR}/Assets.xcassets)
+      target_sources(blender PRIVATE ${BLENDER_VISIONOS_ASSET_CATALOG})
+      set_source_files_properties(${BLENDER_VISIONOS_ASSET_CATALOG} PROPERTIES
+        MACOSX_PACKAGE_LOCATION Resources
+      )
+    endif()
 
     # Additional libraries required by static python extensions compiled directly in source.
     # Otherwise will see Python linking issues during linking in Xcode about missing SSL etc.
@@ -1754,8 +1762,15 @@ elseif(APPLE)
 
   if(WITH_APPLE_CROSSPLATFORM)
     MESSAGE(STATUS "-- CONFIGURING IOS PLIST -- ")
+    # visionOS uses the SwiftUI lifecycle (BlenderVisionApp): its plist has no
+    # UIKit scene delegate and allows multiple scenes for the ImmersiveSpace.
+    if(APPLE_TARGET_DEVICE STREQUAL "visionos")
+      set(BLENDER_IOS_INFO_PLIST ${OSX_APP_SOURCEDIR}/Info-visionos.plist)
+    else()
+      set(BLENDER_IOS_INFO_PLIST ${OSX_APP_SOURCEDIR}/Info.plist)
+    endif()
     set_target_properties(blender PROPERTIES
-      MACOSX_BUNDLE_INFO_PLIST ${OSX_APP_SOURCEDIR}/Info.plist
+      MACOSX_BUNDLE_INFO_PLIST ${BLENDER_IOS_INFO_PLIST}
       MACOSX_BUNDLE_SHORT_VERSION_STRING "${BLENDER_VERSION}.${BLENDER_VERSION_PATCH}"
       MACOSX_BUNDLE_LONG_VERSION_STRING "${BLENDER_VERSION}.${BLENDER_VERSION_PATCH} ${BLENDER_DATE}"
       XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${BLENDER_IOS_BUNDLE_ID}"
@@ -1769,6 +1784,11 @@ elseif(APPLE)
     endif()
 
     set(allresources ${storyboards})
+    if(APPLE_TARGET_DEVICE STREQUAL "visionos")
+      set_target_properties(blender PROPERTIES
+        XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
+      )
+    endif()
     set_target_properties(blender PROPERTIES RESOURCE "${allresources}")
 
     # Xcode Archiving support (Testflight, App Store, etc...)
@@ -1816,10 +1836,15 @@ elseif(APPLE)
   )
 
   set(BLENDER_BIN "bin/blender")
-  install(
-    TARGETS blender
-    DESTINATION "."
-  )
+  # CMake's install(TARGETS) rejects an .xcassets resource directory. Xcode
+  # compiles it directly into the visionOS app; the standalone install target
+  # is not used for device deployment.
+  if(NOT (WITH_APPLE_CROSSPLATFORM AND APPLE_TARGET_DEVICE STREQUAL "visionos"))
+    install(
+      TARGETS blender
+      DESTINATION "."
+    )
+  endif()
 
   if(WITH_APPLE_CROSSPLATFORM)
     install(

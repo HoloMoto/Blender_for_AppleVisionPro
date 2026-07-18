@@ -29,6 +29,12 @@ bool GHOST_Vision_dismiss_immersive_space(void);
 /** True while the Vision Pro Immersive Space is open (or open was requested). */
 bool GHOST_Vision_immersive_space_is_active(void);
 
+/** Push the current active Blender object's location to RealityKit. */
+void GHOST_Vision_update_active_object(const char *object_name,
+                                       float blender_x,
+                                       float blender_y,
+                                       float blender_z);
+
 #ifdef __cplusplus
 }
 #endif

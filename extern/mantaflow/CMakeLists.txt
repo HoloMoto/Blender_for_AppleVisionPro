@@ -226,6 +226,10 @@ if(WITH_MANTA_NUMPY AND WITH_PYTHON_NUMPY)
   )
 endif()
 
+if(WITH_APPLE_CROSSPLATFORM)
+  list(REMOVE_ITEM SRC ${MANTA_PP}/test.cpp)
+endif()
+
 set(LIB
   PRIVATE bf::dependencies::optional::openvdb
   PRIVATE bf::dependencies::optional::tbb
