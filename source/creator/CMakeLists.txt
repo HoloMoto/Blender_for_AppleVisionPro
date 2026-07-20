@@ -540,6 +540,16 @@ elseif(APPLE)
           VERBATIM
         )
       endif()
+      # App Store / TestFlight codesign rejects relocatable object files and
+      # static archives inside the bundle (e.g. config-*-darwin/python.o).
+      # CPython is already linked into Blender; these build artifacts are unused.
+      # Strip both the CMake bundle path and Xcode Archive product dirs.
+      add_custom_command(
+        TARGET blender POST_BUILD
+        COMMAND /bin/sh -c "for ROOT in \"$<TARGET_BUNDLE_DIR:blender>\" \"\${TARGET_BUILD_DIR}/\${FULL_PRODUCT_NAME}\" \"\${BUILT_PRODUCTS_DIR}/\${FULL_PRODUCT_NAME}\"; do [ -z \"\$ROOT\" ] && continue; PYROOT=\"\$ROOT/Assets/${BLENDER_VERSION}/python\"; if [ -d \"\$PYROOT\" ]; then find \"\$PYROOT\" \\( -name '*.o' -o -name '*.a' -o -name '*.obj' \\) -type f -delete; fi; done"
+        COMMENT "Strip non-signable Python build artifacts (.o/.a) from bundle"
+        VERBATIM
+      )
       unset(_postbuild_py_dest_lib)
     endif()
 
@@ -577,6 +587,21 @@ elseif(APPLE)
         )
       endif()
     endif()
+
+    # App Store Connect (ITMS-90171): Mach-O under Assets/ is rejected. Convert
+    # bundled dylibs + Python extensions into Frameworks/*.framework and leave
+    # .fwork redirects for the Python import hook.
+    add_custom_command(
+      TARGET blender POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CMAKE_SOURCE_DIR}/release/ios/blender_appstore_fwork.py"
+              "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/python/lib/python${PYTHON_VERSION}/site-packages/blender_appstore_fwork.py"
+      COMMAND /bin/chmod +x "${CMAKE_SOURCE_DIR}/build_files/cmake/ios_appstore_frameworks.sh"
+      COMMAND /bin/sh "${CMAKE_SOURCE_DIR}/build_files/cmake/ios_appstore_frameworks.sh"
+              "$<TARGET_BUNDLE_DIR:blender>"
+      COMMENT "Convert Assets Mach-O into App Store Frameworks layout"
+      VERBATIM
+    )
   endif()
   if (NOT WITH_APPLE_CROSSPLATFORM)
     if(WITH_BLENDER_THUMBNAILER)

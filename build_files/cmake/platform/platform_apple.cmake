@@ -792,7 +792,10 @@ if(PLATFORM_BUNDLED_LIBRARIES)
   # For the installed Python module and installed Blender executable, we set the
   # rpath to the location where install step will copy the shared libraries.
   set(CMAKE_SKIP_INSTALL_RPATH FALSE)
-  if(WITH_PYTHON_MODULE OR WITH_APPLE_CROSSPLATFORM)
+  if(WITH_APPLE_CROSSPLATFORM)
+    # App Store requires dylibs inside Frameworks/*.framework (see ios_appstore_frameworks.sh).
+    list(APPEND CMAKE_INSTALL_RPATH "@loader_path/Frameworks")
+  elseif(WITH_PYTHON_MODULE)
     list(APPEND CMAKE_INSTALL_RPATH "@loader_path/Assets/lib")
   else()
     list(APPEND CMAKE_INSTALL_RPATH "@loader_path/../Resources/lib")

@@ -537,6 +537,17 @@ void BPY_python_start(bContext *C, int argc, const char **argv)
     }
   }
 
+#if defined(WITH_APPLE_CROSSPLATFORM)
+  /* App Store packaging moves native .so into Frameworks + .fwork redirects. */
+  PyRun_SimpleString(
+      "try:\n"
+      "    import blender_appstore_fwork\n"
+      "    blender_appstore_fwork.install()\n"
+      "except Exception as exc:\n"
+      "    import sys\n"
+      "    print('blender_appstore_fwork failed:', exc, file=sys.stderr)\n");
+#endif
+
 #  ifdef WITH_FLUID
   /* Required to prevent assertion error, see:
    * https://stackoverflow.com/questions/27844676 */
