@@ -25,6 +25,13 @@
                     radius:(float)radius
                 brushLabel:(NSString *)brushLabel
                  brushKind:(int)brushKind;
++ (BOOL)multiuserHost:(NSString *)displayName;
++ (BOOL)multiuserJoin:(NSString *)displayName;
++ (void)multiuserLeave;
++ (BOOL)multiuserIsActive;
++ (BOOL)multiuserIsHost;
++ (NSString *)multiuserStatus;
++ (void)multiuserBroadcastUSD:(NSString *)path;
 @end
 
 bool GHOST_Vision_immersive_space_is_supported(void)
@@ -95,6 +102,78 @@ void GHOST_Vision_update_hand_menu(const int mode,
   }
 }
 
+bool GHOST_Vision_multiuser_host(const char *display_name)
+{
+  __block bool ok = false;
+  @autoreleasepool {
+    NSString *name = (display_name != nullptr) ? [NSString stringWithUTF8String:display_name] :
+                                                 nil;
+    ok = [BlenderImmersiveBridge multiuserHost:name] ? true : false;
+  }
+  return ok;
+}
+
+bool GHOST_Vision_multiuser_join(const char *display_name)
+{
+  __block bool ok = false;
+  @autoreleasepool {
+    NSString *name = (display_name != nullptr) ? [NSString stringWithUTF8String:display_name] :
+                                                 nil;
+    ok = [BlenderImmersiveBridge multiuserJoin:name] ? true : false;
+  }
+  return ok;
+}
+
+void GHOST_Vision_multiuser_leave(void)
+{
+  @autoreleasepool {
+    [BlenderImmersiveBridge multiuserLeave];
+  }
+}
+
+bool GHOST_Vision_multiuser_is_active(void)
+{
+  __block bool active = false;
+  @autoreleasepool {
+    active = [BlenderImmersiveBridge multiuserIsActive] ? true : false;
+  }
+  return active;
+}
+
+bool GHOST_Vision_multiuser_is_host(void)
+{
+  __block bool host = false;
+  @autoreleasepool {
+    host = [BlenderImmersiveBridge multiuserIsHost] ? true : false;
+  }
+  return host;
+}
+
+void GHOST_Vision_multiuser_status(char *dst, const int dst_size)
+{
+  if (dst == nullptr || dst_size <= 0) {
+    return;
+  }
+  dst[0] = '\0';
+  @autoreleasepool {
+    NSString *status = [BlenderImmersiveBridge multiuserStatus];
+    if (status != nil) {
+      [status getCString:dst maxLength:(NSUInteger)dst_size encoding:NSUTF8StringEncoding];
+    }
+  }
+}
+
+void GHOST_Vision_multiuser_broadcast_usd(const char *usdz_path)
+{
+  if (usdz_path == nullptr || usdz_path[0] == '\0') {
+    return;
+  }
+  @autoreleasepool {
+    NSString *path = [NSString stringWithUTF8String:usdz_path];
+    [BlenderImmersiveBridge multiuserBroadcastUSD:path];
+  }
+}
+
 #else
 
 bool GHOST_Vision_immersive_space_is_supported(void)
@@ -133,5 +212,36 @@ void GHOST_Vision_update_hand_menu(const int /*mode*/,
                                    const int /*brush_kind*/)
 {
 }
+
+bool GHOST_Vision_multiuser_host(const char * /*display_name*/)
+{
+  return false;
+}
+
+bool GHOST_Vision_multiuser_join(const char * /*display_name*/)
+{
+  return false;
+}
+
+void GHOST_Vision_multiuser_leave(void) {}
+
+bool GHOST_Vision_multiuser_is_active(void)
+{
+  return false;
+}
+
+bool GHOST_Vision_multiuser_is_host(void)
+{
+  return false;
+}
+
+void GHOST_Vision_multiuser_status(char *dst, const int dst_size)
+{
+  if (dst != nullptr && dst_size > 0) {
+    dst[0] = '\0';
+  }
+}
+
+void GHOST_Vision_multiuser_broadcast_usd(const char * /*usdz_path*/) {}
 
 #endif

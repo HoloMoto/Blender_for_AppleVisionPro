@@ -55,6 +55,29 @@ Ultimate goal: **sculpt in Immersive Space** with bidirectional sync
 | **1** | Muse as Immersive cursor (tip anchor + visual) | Done |
 | **2** | Muse tip → 2D View3D sculpt (tablet projection MVP) | Done (MVP) |
 | **3** | Immersive-native mesh hit / dab (no 2D projection) | Planned |
+| **4** | Multi Vision Pro experience share (Multiuser-inspired) | Done (MVP) |
+
+### Phase 4 — Vision Multiuser (MVP)
+
+Inspired by [Blender Multiuser](https://extensions.blender.org/add-ons/multi-user/)
+(host / join / collaborative session), scoped to Immersive experience sharing:
+
+| Role | Behavior |
+|------|----------|
+| **Idle** (default) | Existing single-user Immersive path unchanged |
+| **Host** | Advertises Multipeer session; broadcasts Immersive USDZ on mesh refresh; sends Muse tip presence |
+| **Guest** | Joins nearby host; loads shared USDZ into Immersive; shows remote Muse cursors; sends own presence |
+
+**UI**
+- Immersive hand / ornament menu: **Host / Join / Leave**
+- Addon **Vision Multiuser** (`scripts/addons_core/vision_multiuser`): Sidebar → **Vision Share**
+- Operators: `wm.ios_immersive_multiuser_{host,join,leave}`
+
+**Transport:** MultipeerConnectivity service `_blender-imu._tcp` (local network).
+Requires `NSLocalNetworkUsageDescription` + Bonjour entitlement in Info.plist.
+
+**Not in MVP (later):** full datablock replication like Multiuser; bidirectional mesh edit merge.
+Host remains authoritative for the shared USD scene.
 
 ### Phase 2 MVP (current)
 

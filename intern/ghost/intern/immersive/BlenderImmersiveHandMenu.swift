@@ -131,6 +131,8 @@ import SwiftUI
           }
         }
 
+        multiuserSection
+
         Button(role: .destructive) {
           WM_IOS_immersive_hand_menu_dismiss()
         } label: {
@@ -141,6 +143,55 @@ import SwiftUI
       .padding(compact ? 12 : 16)
       .frame(width: compact ? 300 : 380)
       .glassBackgroundEffect()
+      .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveMultiuserChanged)) { _ in
+        multiuserStatus = BlenderImmersiveMultiuserSession.shared.statusCopy()
+        multiuserActive = BlenderImmersiveMultiuserSession.shared.isActive
+        multiuserHost = BlenderImmersiveMultiuserSession.shared.isHost
+      }
+      .onAppear {
+        multiuserStatus = BlenderImmersiveMultiuserSession.shared.statusCopy()
+        multiuserActive = BlenderImmersiveMultiuserSession.shared.isActive
+        multiuserHost = BlenderImmersiveMultiuserSession.shared.isHost
+      }
+    }
+
+    @State private var multiuserStatus = "Idle"
+    @State private var multiuserActive = false
+    @State private var multiuserHost = false
+
+    @ViewBuilder private var multiuserSection: some View {
+      VStack(alignment: .leading, spacing: 6) {
+        Text("体験シェア (Multiuser)")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+        Text(multiuserStatus)
+          .font(.caption2)
+          .lineLimit(2)
+        HStack(spacing: 6) {
+          Button("Host") {
+            _ = BlenderImmersiveMultiuserSession.shared.hostSession(displayName: nil)
+          }
+          .buttonStyle(.borderedProminent)
+          .tint(multiuserActive && multiuserHost ? .green : .gray.opacity(0.45))
+          .controlSize(.small)
+          .disabled(multiuserActive)
+
+          Button("Join") {
+            _ = BlenderImmersiveMultiuserSession.shared.joinSession(displayName: nil)
+          }
+          .buttonStyle(.borderedProminent)
+          .tint(multiuserActive && !multiuserHost ? .blue : .gray.opacity(0.45))
+          .controlSize(.small)
+          .disabled(multiuserActive)
+
+          Button("Leave") {
+            BlenderImmersiveMultiuserSession.shared.leaveSession()
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+          .disabled(!multiuserActive)
+        }
+      }
     }
 
     private func modeButton(_ title: String, _ value: Int) -> some View {

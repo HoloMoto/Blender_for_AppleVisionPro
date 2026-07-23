@@ -64,4 +64,57 @@ public final class BlenderImmersiveBridge: NSObject {
       }
     #endif
   }
+
+  @objc public static func multiuserHost(_ displayName: String?) -> Bool {
+    #if os(visionOS)
+      return BlenderImmersiveMultiuserSession.shared.hostSession(displayName: displayName)
+    #else
+      return false
+    #endif
+  }
+
+  @objc public static func multiuserJoin(_ displayName: String?) -> Bool {
+    #if os(visionOS)
+      return BlenderImmersiveMultiuserSession.shared.joinSession(displayName: displayName)
+    #else
+      return false
+    #endif
+  }
+
+  @objc public static func multiuserLeave() {
+    #if os(visionOS)
+      BlenderImmersiveMultiuserSession.shared.leaveSession()
+    #endif
+  }
+
+  @objc public static func multiuserIsActive() -> Bool {
+    #if os(visionOS)
+      return BlenderImmersiveMultiuserSession.shared.isActive
+    #else
+      return false
+    #endif
+  }
+
+  @objc public static func multiuserIsHost() -> Bool {
+    #if os(visionOS)
+      return BlenderImmersiveMultiuserSession.shared.isHost
+    #else
+      return false
+    #endif
+  }
+
+  @objc public static func multiuserStatus() -> String {
+    #if os(visionOS)
+      return BlenderImmersiveMultiuserSession.shared.statusCopy()
+    #else
+      return "Unavailable"
+    #endif
+  }
+
+  @objc public static func multiuserBroadcastUSD(_ path: String?) {
+    #if os(visionOS)
+      guard let path, !path.isEmpty else { return }
+      BlenderImmersiveMultiuserSession.shared.broadcastUSD(at: path)
+    #endif
+  }
 }

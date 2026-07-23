@@ -445,6 +445,11 @@ import UIKit
             let tipPressure = live.tip ? max(live.tipPressure, 0.05) : 0
             WM_IOS_immersive_muse_sample(
               blender.x, blender.y, blender.z, tipPressure, live.tip ? 1 : 0)
+            /* Multiuser: share tip presence only when a session is active. */
+            if BlenderImmersiveMultiuserSession.shared.isActive {
+              BlenderImmersiveMultiuserSession.shared.sendLocalPresence(
+                x: blender.x, y: blender.y, z: blender.z, tipDown: live.tip)
+            }
 
             if ticks % 30 == 0 {
               print(

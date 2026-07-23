@@ -51,6 +51,12 @@
 	<string>Blender uses the camera for Reality Kit immersive AR mode.</string>
 	<key>NSHandsTrackingUsageDescription</key>
 	<string>Blender uses hand tracking together with Muse accessory tracking in Immersive Space.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Blender shares Immersive sessions with nearby Vision Pro devices over the local network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_blender-imu._tcp</string>
+	</array>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMainCameraUsageDescription</key>

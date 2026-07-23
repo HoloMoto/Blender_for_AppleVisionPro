@@ -5395,6 +5395,8 @@ static void wm_ios_immersive_sync_impl(bContext *C)
       }
       if (wm_ios_immersive_export_scene(C, usdz_path, false)) {
         GHOST_IOS_immersive_reload_model(usdz_path);
+        /* Host-authoritative scene share: guests receive this USDZ snapshot. */
+        GHOST_IOS_multiuser_broadcast_usd(usdz_path);
         last_export_time = now;
         last_update_count = depsgraph ? DEG_get_update_count(depsgraph) : last_update_count;
         pending_update_count = 0;
@@ -5481,8 +5483,89 @@ static wmOperatorStatus wm_ios_immersive_toggle_exec(bContext *C, wmOperator * /
     return OPERATOR_CANCELLED;
   }
 
+  /* If already hosting a multiuser session, push the opening snapshot. */
+  GHOST_IOS_multiuser_broadcast_usd(usdz_path);
+
   WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
   return OPERATOR_FINISHED;
+}
+
+static wmOperatorStatus wm_ios_multiuser_host_exec(bContext *C, wmOperator *op)
+{
+  char name[64];
+  RNA_string_get(op->ptr, "display_name", name);
+  if (!GHOST_IOS_multiuser_host(name[0] != '\0' ? name : nullptr)) {
+    BKE_report(op->reports, RPT_ERROR, "Could not start Immersive multiuser host");
+    return OPERATOR_CANCELLED;
+  }
+  /* Push current Immersive USD if already open. */
+  char usdz_path[FILE_MAX] = "";
+  BLI_path_join(usdz_path, sizeof(usdz_path), BKE_tempdir_session(), "immersive_preview.usdz");
+  if (GHOST_IOS_immersive_mode_is_active()) {
+    if (wm_ios_immersive_export_scene(C, usdz_path, false)) {
+      GHOST_IOS_immersive_reload_model(usdz_path);
+      GHOST_IOS_multiuser_broadcast_usd(usdz_path);
+    }
+  }
+  WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+  return OPERATOR_FINISHED;
+}
+
+static wmOperatorStatus wm_ios_multiuser_join_exec(bContext * /*C*/, wmOperator *op)
+{
+  char name[64];
+  RNA_string_get(op->ptr, "display_name", name);
+  if (!GHOST_IOS_multiuser_join(name[0] != '\0' ? name : nullptr)) {
+    BKE_report(op->reports, RPT_ERROR, "Could not join Immersive multiuser session");
+    return OPERATOR_CANCELLED;
+  }
+  return OPERATOR_FINISHED;
+}
+
+static wmOperatorStatus wm_ios_multiuser_leave_exec(bContext * /*C*/, wmOperator * /*op*/)
+{
+  GHOST_IOS_multiuser_leave();
+  return OPERATOR_FINISHED;
+}
+
+static void WM_OT_ios_immersive_multiuser_host(wmOperatorType *ot)
+{
+  ot->name = "Immersive Multiuser Host";
+  ot->idname = "WM_OT_ios_immersive_multiuser_host";
+  ot->description =
+      "Host a local-network Immersive share session for nearby Vision Pro devices";
+  ot->exec = wm_ios_multiuser_host_exec;
+  ot->poll = wm_ios_immersive_poll;
+  RNA_def_string(ot->srna,
+                 "display_name",
+                 "",
+                 64,
+                 "Display Name",
+                 "Name shown to guests");
+}
+
+static void WM_OT_ios_immersive_multiuser_join(wmOperatorType *ot)
+{
+  ot->name = "Immersive Multiuser Join";
+  ot->idname = "WM_OT_ios_immersive_multiuser_join";
+  ot->description = "Join a nearby Vision Pro Immersive share session";
+  ot->exec = wm_ios_multiuser_join_exec;
+  ot->poll = wm_ios_immersive_poll;
+  RNA_def_string(ot->srna,
+                 "display_name",
+                 "",
+                 64,
+                 "Display Name",
+                 "Name shown to the host");
+}
+
+static void WM_OT_ios_immersive_multiuser_leave(wmOperatorType *ot)
+{
+  ot->name = "Immersive Multiuser Leave";
+  ot->idname = "WM_OT_ios_immersive_multiuser_leave";
+  ot->description = "Leave the Immersive multiuser share session";
+  ot->exec = wm_ios_multiuser_leave_exec;
+  ot->poll = wm_ios_immersive_poll;
 }
 
 static void WM_OT_ios_immersive_toggle(wmOperatorType *ot)
@@ -5549,6 +5632,9 @@ void wm_operatortypes_register()
 #endif
 #if defined(WITH_APPLE_CROSSPLATFORM)
   WM_operatortype_append(WM_OT_ios_immersive_toggle);
+  WM_operatortype_append(WM_OT_ios_immersive_multiuser_host);
+  WM_operatortype_append(WM_OT_ios_immersive_multiuser_join);
+  WM_operatortype_append(WM_OT_ios_immersive_multiuser_leave);
 #endif
   WM_operatortype_append(WM_OT_previews_ensure);
   WM_operatortype_append(WM_OT_previews_clear);

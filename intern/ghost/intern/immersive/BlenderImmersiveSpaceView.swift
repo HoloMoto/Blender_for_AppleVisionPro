@@ -10,6 +10,7 @@
 import Foundation
 import RealityKit
 import SwiftUI
+import UIKit
 import simd
 
 #if os(visionOS)
@@ -237,6 +238,7 @@ import simd
     @State private var handMenuConfigured = false
     @StateObject private var objectSync = BlenderImmersiveObjectSync()
     @StateObject private var musePen = BlenderImmersiveMusePenController()
+    @State private var remotePresenceRoot = Entity()
 
     public init() {}
 
@@ -264,6 +266,8 @@ import simd
 
           objectSync.bindWorldRoot(worldRoot)
           musePen.attach(to: worldRoot)
+          remotePresenceRoot.name = "BlenderRemotePresence"
+          worldRoot.addChild(remotePresenceRoot)
           content.add(leftHandAnchor)
           if let menuEntity = attachments.entity(for: "handMenu") {
             configureHandMenuEntity(menuEntity)
@@ -362,6 +366,11 @@ import simd
         handMenuRadius = BlenderImmersiveState.shared.handMenuRadius
         handMenuBrushLabel = BlenderImmersiveState.shared.handMenuBrushLabel
       }
+      .onReceive(
+        NotificationCenter.default.publisher(for: .blenderImmersiveRemotePresenceChanged)
+      ) { _ in
+        refreshRemotePresence()
+      }
       .onAppear {
         BlenderImmersiveState.shared.markActive(true)
         /* Immersive Space often pauses the 2D MTKView; keep Muse→View3D sync alive. */
@@ -377,6 +386,44 @@ import simd
         musePen.detach()
         GHOST_IOS_immersive_muse_tick_set_enabled(false)
         BlenderImmersiveState.shared.markActive(false)
+      }
+    }
+
+    /** Blender → RealityKit local (inverse of MusePen conversion). */
+    private func blenderToRealityKit(_ blender: SIMD3<Float>) -> SIMD3<Float> {
+      SIMD3(blender.x, blender.z, -blender.y)
+    }
+
+    private func refreshRemotePresence() {
+      let snapshots = BlenderImmersiveMultiuserSession.shared.remotePresenceSnapshot()
+      var seen = Set<String>()
+      for presence in snapshots {
+        seen.insert(presence.peerId)
+        let entity: Entity
+        if let existing = remotePresenceRoot.children.first(where: { $0.name == presence.peerId })
+        {
+          entity = existing
+        }
+        else {
+          let mesh = MeshResource.generateSphere(radius: 0.012)
+          let material = SimpleMaterial(
+            color: UIColor(
+              red: CGFloat(presence.colorR),
+              green: CGFloat(presence.colorG),
+              blue: CGFloat(presence.colorB),
+              alpha: 0.95),
+            isMetallic: false)
+          let model = ModelEntity(mesh: mesh, materials: [material])
+          model.name = presence.peerId
+          remotePresenceRoot.addChild(model)
+          entity = model
+        }
+        entity.position = blenderToRealityKit(
+          SIMD3(presence.x, presence.y, presence.z))
+        entity.scale = SIMD3(repeating: presence.tipDown ? 1.35 : 1.0)
+      }
+      for child in remotePresenceRoot.children where !seen.contains(child.name) {
+        child.removeFromParent()
       }
     }
 

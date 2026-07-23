@@ -42,6 +42,16 @@ void GHOST_Vision_update_hand_menu(int mode,
                                    const char *brush_label,
                                    int brush_kind);
 
+/** Multi Vision Pro Immersive share (Multipeer). No-op when inactive. */
+bool GHOST_Vision_multiuser_host(const char *display_name);
+bool GHOST_Vision_multiuser_join(const char *display_name);
+void GHOST_Vision_multiuser_leave(void);
+bool GHOST_Vision_multiuser_is_active(void);
+bool GHOST_Vision_multiuser_is_host(void);
+/** Copies UTF-8 status into \a dst (always NUL-terminated). */
+void GHOST_Vision_multiuser_status(char *dst, int dst_size);
+void GHOST_Vision_multiuser_broadcast_usd(const char *usdz_path);
+
 #ifdef __cplusplus
 }
 #endif

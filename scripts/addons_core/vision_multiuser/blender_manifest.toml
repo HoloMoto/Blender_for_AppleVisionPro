@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Blender Authors
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+schema_version = "1.0.0"
+id = "bl_ext.blender_org.vision_multiuser"
+version = "0.1.0"
+name = "Vision Multiuser"
+tagline = "Share Immersive Space across Vision Pro devices"
+maintainer = "HoloMoto / Blender Vision Pro"
+type = "add-on"
+tags = ["3D View", "Import-Export"]
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-2.0-or-later"]
+website = "https://github.com/HoloMoto/Blender_for_AppleVisionPro"
+copyright = ["2026 Blender Authors"]
+permissions = ["network"]

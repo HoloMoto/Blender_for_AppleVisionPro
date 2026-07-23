@@ -174,3 +174,39 @@ extern "C" void GHOST_IOS_push_tablet_button(const bool is_down, const float pre
                                   GHOST_kButtonMaskLeft,
                                   ghost_ios_tablet_from_pressure(pressure));
 }
+
+extern "C" bool GHOST_IOS_multiuser_host(const char *display_name)
+{
+  return GHOST_Vision_multiuser_host(display_name);
+}
+
+extern "C" bool GHOST_IOS_multiuser_join(const char *display_name)
+{
+  return GHOST_Vision_multiuser_join(display_name);
+}
+
+extern "C" void GHOST_IOS_multiuser_leave(void)
+{
+  GHOST_Vision_multiuser_leave();
+}
+
+extern "C" bool GHOST_IOS_multiuser_is_active(void)
+{
+  return GHOST_Vision_multiuser_is_active();
+}
+
+extern "C" bool GHOST_IOS_multiuser_is_host(void)
+{
+  return GHOST_Vision_multiuser_is_host();
+}
+
+extern "C" void GHOST_IOS_multiuser_status(char *dst, const int dst_size)
+{
+  GHOST_Vision_multiuser_status(dst, dst_size);
+}
+
+extern "C" void GHOST_IOS_multiuser_broadcast_usd(const char *usdz_path)
+{
+  /* Safe when inactive / guest: Swift no-ops. */
+  GHOST_Vision_multiuser_broadcast_usd(usdz_path);
+}

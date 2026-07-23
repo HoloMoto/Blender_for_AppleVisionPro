@@ -173,6 +173,18 @@ extern void GHOST_IOS_push_tablet_cursor(int x, int y, float pressure);
 /** Inject left-button down/up with stylus tablet pressure. */
 extern void GHOST_IOS_push_tablet_button(bool is_down, float pressure);
 
+/**
+ * Multi Vision Pro Immersive share (MultipeerConnectivity).
+ * Inspired by Blender Multiuser host/join; inactive = single-user path unchanged.
+ */
+extern bool GHOST_IOS_multiuser_host(const char *display_name);
+extern bool GHOST_IOS_multiuser_join(const char *display_name);
+extern void GHOST_IOS_multiuser_leave(void);
+extern bool GHOST_IOS_multiuser_is_active(void);
+extern bool GHOST_IOS_multiuser_is_host(void);
+extern void GHOST_IOS_multiuser_status(char *dst, int dst_size);
+extern void GHOST_IOS_multiuser_broadcast_usd(const char *usdz_path);
+
 #endif
 
 /**
