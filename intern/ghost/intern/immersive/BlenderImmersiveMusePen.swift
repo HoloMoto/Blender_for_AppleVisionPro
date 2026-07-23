@@ -57,6 +57,8 @@ import UIKit
     private var sampleTask: Task<Void, Never>?
     private var attachGeneration: UInt = 0
     private var lastLoggedTipDown = false
+    /** Tip press hysteresis — prevents stroke restart flicker. */
+    private var tipLatch = false
 
     private enum SessionLifecycle {
       case idle
@@ -92,6 +94,7 @@ import UIKit
       primaryPressedByStylus.removeAll()
       secondaryPressedByStylus.removeAll()
       lastLoggedTipDown = false
+      tipLatch = false
 
       let session = trackingSession
       trackingSession = nil
@@ -400,7 +403,7 @@ import UIKit
             /* Prefer live button poll — handler cache alone was stuck at tip=0. */
             let live: (tip: Bool, tipPressure: Float, primary: Bool, secondary: Bool)
             if let stylus = self.stylusByKey[key] {
-              live = Self.buttonState(fromStylus: stylus)
+              live = Self.buttonState(fromStylus: stylus, latch: &self.tipLatch)
             }
             else {
               live = (
@@ -442,7 +445,7 @@ import UIKit
               self.refreshStatus()
             }
 
-            let tipPressure = live.tip ? max(live.tipPressure, 0.05) : 0
+            let tipPressure = live.tip ? max(live.tipPressure, 0.2) : 0
             WM_IOS_immersive_muse_sample(
               blender.x, blender.y, blender.z, tipPressure, live.tip ? 1 : 0)
             /* Multiuser: share tip presence only when a session is active. */
@@ -481,11 +484,14 @@ import UIKit
       BlenderIOSDiagnosticLog.bootSwiftOnly(msg)
     }
 
-    /** Tip = sculpt. Front/middle buttons are used for brush switching, not draw. */
-    private static func buttonState(fromStylus stylus: GCStylus) -> (
+    /** Tip = sculpt. Front/middle buttons are used for brush switching, not draw.
+     * Hysteresis avoids tip flicker restarting the stroke every frame (which
+     * previously skipped Inflate forever via the first-frame early-return). */
+    private static func buttonState(fromStylus stylus: GCStylus, latch: inout Bool) -> (
       tip: Bool, tipPressure: Float, primary: Bool, secondary: Bool
     ) {
       guard let buttons = stylus.input?.buttons else {
+        latch = false
         return (false, 0, false, false)
       }
       let tip = buttons[.stylusTip]
@@ -494,10 +500,27 @@ import UIKit
       let tipP = max(tip?.pressedInput.value ?? 0, tip?.forceInput?.value ?? 0)
       let primP = max(primary?.pressedInput.value ?? 0, primary?.forceInput?.value ?? 0)
       let secP = max(secondary?.pressedInput.value ?? 0, secondary?.forceInput?.value ?? 0)
-      let tipDown = (tip?.pressedInput.isPressed ?? false) || tipP > 0.02
+      let pressed = tip?.pressedInput.isPressed ?? false
+      let enterThreshold: Float = 0.015
+      let exitThreshold: Float = 0.008
+      let tipDown: Bool
+      if latch {
+        tipDown = pressed || tipP > exitThreshold
+      }
+      else {
+        tipDown = pressed || tipP > enterThreshold
+      }
+      latch = tipDown
       let primDown = (primary?.pressedInput.isPressed ?? false) || primP > 0.35
       let secDown = (secondary?.pressedInput.isPressed ?? false) || secP > 0.02
-      return (tipDown, tipDown ? max(tipP, 0.05) : tipP, primDown, secDown)
+      return (tipDown, tipDown ? max(tipP, 0.2) : tipP, primDown, secDown)
+    }
+
+    private static func buttonState(fromStylus stylus: GCStylus) -> (
+      tip: Bool, tipPressure: Float, primary: Bool, secondary: Bool
+    ) {
+      var latch = false
+      return buttonState(fromStylus: stylus, latch: &latch)
     }
 
     private static func drawState(fromStylus stylus: GCStylus) -> (pressed: Bool, pressure: Float)

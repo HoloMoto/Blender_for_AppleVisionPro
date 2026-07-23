@@ -4311,6 +4311,9 @@ struct WMIOSImmersiveHandMenuPending {
 static WMIOSImmersiveHandMenuPending g_wm_ios_hand_menu_cmd;
 static int g_wm_ios_muse_brush_kind = WMIOS_MUSE_BRUSH_INFLATE_ADD;
 static bool g_wm_ios_muse_vpaint_erase = false;
+/** Hand-menu radius/strength — prefer these over brush asset values for Muse. */
+static float g_wm_ios_muse_radius_m = 0.25f;
+static float g_wm_ios_muse_strength = 0.5f;
 struct WMIOSMuseSculptVert {
   int index;
   float weight;
@@ -4405,6 +4408,7 @@ extern "C" void WM_IOS_immersive_hand_menu_set_strength(const float strength)
 {
   std::lock_guard lock(g_wm_ios_hand_menu_cmd.mutex);
   g_wm_ios_hand_menu_cmd.strength = std::clamp(strength, 0.01f, 1.0f);
+  g_wm_ios_muse_strength = g_wm_ios_hand_menu_cmd.strength;
   g_wm_ios_hand_menu_cmd.pending_strength = true;
 }
 
@@ -4412,6 +4416,7 @@ extern "C" void WM_IOS_immersive_hand_menu_set_radius(const float radius_m)
 {
   std::lock_guard lock(g_wm_ios_hand_menu_cmd.mutex);
   g_wm_ios_hand_menu_cmd.radius = std::clamp(radius_m, 0.01f, 2.0f);
+  g_wm_ios_muse_radius_m = g_wm_ios_hand_menu_cmd.radius;
   g_wm_ios_hand_menu_cmd.pending_radius = true;
 }
 
@@ -4663,9 +4668,11 @@ static void wm_ios_immersive_apply_hand_menu(bContext *C)
     if (Paint *paint = BKE_paint_get_active_from_paintmode(scene, paint_mode)) {
       if (Brush *brush = BKE_paint_brush(paint)) {
         if (pending_strength) {
+          g_wm_ios_muse_strength = strength;
           BKE_brush_alpha_set(paint, brush, strength);
         }
         if (pending_radius) {
+          g_wm_ios_muse_radius_m = radius;
           BKE_brush_unprojected_size_set(paint, brush, radius * 2.0f);
         }
       }
@@ -4682,6 +4689,12 @@ static void wm_ios_immersive_apply_hand_menu(bContext *C)
  * Sculpt Mode: continuous soft deform along the Muse tip.
  * Brush kind (hand menu): Draw/Clay = tip follow, Grab = locked cluster,
  * Smooth = relax toward local average. Pressure × Strength every frame.
+ *
+ * Robustness notes:
+ * - Prefer hand-menu radius/strength (brush assets may be missing / wrong scale).
+ * - If tip misses the mesh, expand radius to the nearest vertex so strokes "catch".
+ * - Inflate/Smooth apply on the first tip-down frame (no early return) so noisy tip
+ *   pressure cannot skip deformation forever.
  */
 static void wm_ios_immersive_muse_sculpt_grab(bContext *C,
                                               Object *ob,
@@ -4714,41 +4727,72 @@ static void wm_ios_immersive_muse_sculpt_grab(bContext *C,
       BKE_sculptsession_free_pbvh(*ob);
       mesh->tag_positions_changed();
       DEG_id_tag_update(&mesh->id, ID_RECALC_GEOMETRY);
+      DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
       WM_event_add_notifier(C, NC_OBJECT | ND_DRAW, ob);
       ED_undo_push(C, "Muse Sculpt");
     }
     return;
   }
 
-  float radius = 0.25f;
-  float brush_strength = 1.0f;
+  /* Hand-menu radius is authoritative for Immersive Muse. Brush unprojected size
+   * is only a fallback when the menu has never been touched. */
+  float radius = std::clamp(g_wm_ios_muse_radius_m, 0.02f, 1.5f);
+  float brush_strength = std::clamp(g_wm_ios_muse_strength, 0.05f, 1.0f);
   if (Scene *scene = CTX_data_scene(C)) {
     if (Paint *paint = BKE_paint_get_active_from_paintmode(scene, PaintMode::Sculpt)) {
       if (Brush *brush = BKE_paint_brush(paint)) {
         const float unprojected = BKE_brush_unprojected_radius_get(paint, brush);
-        if (unprojected > 1.0e-4f) {
+        /* Ignore absurd brush sizes (often means assets failed / wrong units). */
+        if (unprojected > 0.02f && unprojected < 1.5f && g_wm_ios_muse_radius_m <= 0.26f &&
+            g_wm_ios_muse_radius_m >= 0.24f)
+        {
+          /* Still on default menu radius — allow brush to refine once. */
           radius = unprojected;
         }
-        brush_strength = BKE_brush_alpha_get(paint, brush);
+        const float alpha = BKE_brush_alpha_get(paint, brush);
+        if (alpha > 0.05f && alpha <= 1.0f && g_wm_ios_muse_strength <= 0.51f &&
+            g_wm_ios_muse_strength >= 0.49f)
+        {
+          brush_strength = alpha;
+        }
       }
     }
   }
 
   const float tip_force = std::clamp(pressure, 0.0f, 1.0f);
-  const float strength = std::max(tip_force, 0.05f) * std::max(brush_strength, 0.01f);
-  blender::MutableSpan<blender::float3> positions = mesh->vert_positions_for_write();
+  const float strength = std::max(tip_force, 0.15f) * std::max(brush_strength, 0.2f);
+
+  /* Snap / expand radius to nearest vertex when tip is near but outside brush. */
+  const blender::Span<blender::float3> positions_read = mesh->vert_positions();
+  float nearest_dist = FLT_MAX;
+  int nearest_i = -1;
+  for (int i = 0; i < int(positions_read.size()); i++) {
+    const float dist_sq = len_squared_v3v3(&positions_read[i].x, muse_local);
+    if (dist_sq < nearest_dist) {
+      nearest_dist = dist_sq;
+      nearest_i = i;
+    }
+  }
+  nearest_dist = (nearest_i >= 0) ? sqrtf(nearest_dist) : FLT_MAX;
+  if (nearest_i >= 0 && nearest_dist > radius && nearest_dist < std::max(radius * 4.0f, 0.6f)) {
+    radius = nearest_dist * 1.25f;
+  }
+
   const float radius_sq = radius * radius;
+  const bool is_grab = (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_GRAB);
+  const bool is_inflate = (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_INFLATE_ADD ||
+                           g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_INFLATE_SUB);
+  const bool is_smooth = (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_SMOOTH);
 
   if (!g_wm_ios_muse_sculpt_dragging) {
     copy_v3_v3(g_wm_ios_muse_sculpt_last_local, muse_local);
     g_wm_ios_muse_sculpt_dragging = true;
     g_wm_ios_muse_stroke_active = true;
-    /* Drop any leftover PBVH from a prior Vertex Paint / Sculpt session so
-     * tip-driven writes to Mesh positions actually stick and export. */
     if (ob->sculpt != nullptr) {
       BKE_sculptsession_free_pbvh(*ob);
     }
-    if (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_GRAB) {
+    if (is_grab) {
+      blender::MutableSpan<blender::float3> positions = mesh->vert_positions_for_write();
       g_wm_ios_muse_sculpt_verts.clear();
       g_wm_ios_muse_sculpt_verts.reserve(256);
       for (int i = 0; i < int(positions.size()); i++) {
@@ -4764,25 +4808,47 @@ static void wm_ios_immersive_muse_sculpt_grab(bContext *C,
         g_wm_ios_muse_sculpt_dragging = false;
         g_wm_ios_muse_stroke_active = false;
       }
+      {
+        static double last_log = 0.0;
+        const double now = BLI_time_now_seconds();
+        if (now - last_log > 0.5) {
+          last_log = now;
+          fprintf(stderr,
+                  "[immersive] sculpt grab start hits=%zu nearest=%.3f radius=%.3f "
+                  "tip=(%.3f,%.3f,%.3f)\n",
+                  g_wm_ios_muse_sculpt_verts.size(),
+                  nearest_dist,
+                  radius,
+                  muse_local[0],
+                  muse_local[1],
+                  muse_local[2]);
+          fflush(stderr);
+        }
+      }
+      return;
     }
-    return;
+    /* Inflate / Smooth / Draw: fall through and deform on this same frame. */
   }
 
   float delta[3];
   sub_v3_v3v3(delta, muse_local, g_wm_ios_muse_sculpt_last_local);
   copy_v3_v3(g_wm_ios_muse_sculpt_last_local, muse_local);
 
+  blender::MutableSpan<blender::float3> positions = mesh->vert_positions_for_write();
   bool any = false;
-  if (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_GRAB) {
+  int hit_count = 0;
+
+  if (is_grab) {
     if (len_squared_v3(delta) < 1e-12f) {
       return;
     }
     for (const WMIOSMuseSculptVert &entry : g_wm_ios_muse_sculpt_verts) {
       madd_v3_v3fl(&positions[entry.index].x, delta, entry.weight);
       any = true;
+      hit_count++;
     }
   }
-  else if (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_SMOOTH) {
+  else if (is_smooth) {
     std::vector<int> indices;
     indices.reserve(128);
     float centroid[3] = {0.0f, 0.0f, 0.0f};
@@ -4797,22 +4863,23 @@ static void wm_ios_immersive_muse_sculpt_grab(bContext *C,
       return;
     }
     mul_v3_fl(centroid, 1.0f / float(indices.size()));
-    const float blend = 0.35f * strength;
+    const float blend = 0.45f * strength;
     for (const int i : indices) {
       float *co = &positions[i].x;
       co[0] += (centroid[0] - co[0]) * blend;
       co[1] += (centroid[1] - co[1]) * blend;
       co[2] += (centroid[2] - co[2]) * blend;
       any = true;
+      hit_count++;
     }
   }
-  else if (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_INFLATE_ADD ||
-           g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_INFLATE_SUB)
-  {
-    /* Inflate/Deflate along vertex normals (independent of tip motion). */
+  else if (is_inflate) {
+    /* Snapshot normals before mutating positions. */
+    const blender::Span<blender::float3> normals_span = mesh->vert_normals();
+    std::vector<blender::float3> normals(normals_span.begin(), normals_span.end());
     const float dir = (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_INFLATE_SUB) ? -1.0f : 1.0f;
-    const float amount = strength * radius * 0.06f * dir;
-    const blender::Span<blender::float3> normals = mesh->vert_normals();
+    /* Stronger than before — previous 0.06 * radius was easy to miss visually. */
+    const float amount = strength * radius * 0.20f * dir;
     for (int i = 0; i < int(positions.size()); i++) {
       const float dist_sq = len_squared_v3v3(&positions[i].x, muse_local);
       if (dist_sq > radius_sq) {
@@ -4822,6 +4889,7 @@ static void wm_ios_immersive_muse_sculpt_grab(bContext *C,
       const float w = t * t * (3.0f - 2.0f * t) * amount;
       madd_v3_v3fl(&positions[i].x, &normals[i].x, w);
       any = true;
+      hit_count++;
     }
   }
   else {
@@ -4839,14 +4907,49 @@ static void wm_ios_immersive_muse_sculpt_grab(bContext *C,
       const float w = t * t * (3.0f - 2.0f * t) * strength * clay_scale;
       madd_v3_v3fl(&positions[i].x, delta, w);
       any = true;
+      hit_count++;
     }
   }
+
+  {
+    static double last_log = 0.0;
+    const double now = BLI_time_now_seconds();
+    if (now - last_log > 0.75) {
+      last_log = now;
+      fprintf(stderr,
+              "[immersive] sculpt deform kind=%d hits=%d nearest=%.3f radius=%.3f "
+              "p=%.2f strength=%.2f any=%d\n",
+              g_wm_ios_muse_brush_kind,
+              hit_count,
+              nearest_dist,
+              radius,
+              tip_force,
+              strength,
+              int(any));
+      fflush(stderr);
+      char buf[192];
+      SNPRINTF(buf,
+               "sculpt kind=%d hits=%d near=%.2f r=%.2f p=%.2f",
+               g_wm_ios_muse_brush_kind,
+               hit_count,
+               nearest_dist,
+               radius,
+               tip_force);
+      GHOST_IOS_diag_log(buf);
+    }
+  }
+
   if (!any) {
     return;
   }
 
   mesh->tag_positions_changed();
+  /* Keep sculpt PBVH from reusing stale positions mid-stroke. */
+  if (ob->sculpt != nullptr) {
+    BKE_sculptsession_free_pbvh(*ob);
+  }
   DEG_id_tag_update(&mesh->id, ID_RECALC_GEOMETRY);
+  DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
   WM_event_add_notifier(C, NC_GEOM | ND_DATA, mesh);
 }
 
