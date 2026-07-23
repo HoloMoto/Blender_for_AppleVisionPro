@@ -30,6 +30,10 @@
 #include <cstdio>
 #include <string>
 
+extern "C" void GHOST_IOS_diag_log(const char *message);
+extern "C" void GHOST_IOS_diag_install_handlers(void);
+extern "C" void GHOST_IOS_diag_write_readme(void);
+
 // #define IOS_SYSTEM_LOGGING
 #if defined(IOS_SYSTEM_LOGGING)
 #  define IOS_SYSTEM_LOG(...) NSLog(__VA_ARGS__)
@@ -52,6 +56,67 @@ void WM_main_loop_body(bContext *C);
 /* Implemented in wm_operators.cc. */
 void WM_ios_immersive_sync_active_object(bContext *C);
 int main_ios_callback(int argc, const char **argv);
+
+@interface GHOST_IOSImmersiveMuseTicker : NSObject
+- (void)tick:(CADisplayLink *)link;
+@end
+
+@implementation GHOST_IOSImmersiveMuseTicker
+- (void)tick:(CADisplayLink *)link
+{
+  (void)link;
+  if (C == nullptr) {
+    return;
+  }
+  GHOST_SystemIOS *system = static_cast<GHOST_SystemIOS *>(GHOST_ISystem::getSystem());
+  if (system != nullptr && system->current_active_window_ != nullptr) {
+    /* Immersive Space often backgrounds the 2D window; keep drawing/events alive. */
+    system->current_active_window_->setRenderingPaused(false);
+  }
+  WM_ios_immersive_sync_active_object(C);
+  WM_main_loop_body(C);
+}
+@end
+
+/** Display-link Muse/event tick while Immersive Space is open.
+ * MTKView often stops drawing when the 2D window loses focus; without this,
+ * Muse→View3D injection never runs. */
+static CADisplayLink *g_ios_immersive_muse_link = nil;
+static GHOST_IOSImmersiveMuseTicker *g_ios_immersive_muse_ticker = nil;
+
+extern "C" void GHOST_IOS_immersive_muse_tick_set_enabled(const bool enable)
+{
+  void (^apply)(void) = ^{
+    if (enable) {
+      if (g_ios_immersive_muse_link != nil) {
+        return;
+      }
+      if (g_ios_immersive_muse_ticker == nil) {
+        g_ios_immersive_muse_ticker = [[GHOST_IOSImmersiveMuseTicker alloc] init];
+      }
+      g_ios_immersive_muse_link = [CADisplayLink
+          displayLinkWithTarget:g_ios_immersive_muse_ticker
+                       selector:@selector(tick:)];
+      if (@available(iOS 15.0, visionOS 1.0, *)) {
+        g_ios_immersive_muse_link.preferredFrameRateRange = CAFrameRateRangeMake(30, 60, 30);
+      }
+      [g_ios_immersive_muse_link addToRunLoop:[NSRunLoop mainRunLoop]
+                                      forMode:NSRunLoopCommonModes];
+      GHOST_IOS_diag_log("ghost: immersive muse tick enabled");
+    }
+    else if (g_ios_immersive_muse_link != nil) {
+      [g_ios_immersive_muse_link invalidate];
+      g_ios_immersive_muse_link = nil;
+      GHOST_IOS_diag_log("ghost: immersive muse tick disabled");
+    }
+  };
+  if ([NSThread isMainThread]) {
+    apply();
+  }
+  else {
+    dispatch_async(dispatch_get_main_queue(), apply);
+  }
+}
 
 @interface IOSAppDelegate : UIResponder <UIApplicationDelegate>
 
@@ -305,9 +370,13 @@ static void ghost_ios_start_blender_main(const char *origin)
   if (g_ios_startup_started) {
     fprintf(stderr, "[ios] startup (%s) ignored: already started\n", origin);
     fflush(stderr);
+    GHOST_IOS_diag_log("ghost: startup ignored (already started)");
     return;
   }
   g_ios_startup_started = YES;
+  char buf[128];
+  snprintf(buf, sizeof(buf), "ghost: ghost_ios_start_blender_main (%s)", origin);
+  GHOST_IOS_diag_log(buf);
 
   /* Under the SwiftUI entry point GHOST_iosmain() never runs, so argc/argv
    * were never captured. Build them from the process arguments. */
@@ -329,12 +398,23 @@ static void ghost_ios_start_blender_main(const char *origin)
 
   fprintf(stderr, "[ios] startup (%s): starting main_ios_callback argc=%d\n", origin, argc);
   fflush(stderr);
+  GHOST_IOS_diag_log("ghost: dispatch main_ios_callback");
   dispatch_async(dispatch_get_main_queue(), ^{
     @try {
+      GHOST_IOS_diag_log("ghost: main_ios_callback begin");
       main_ios_callback(argc, argv);
-      ghost_ios_schedule_reactivation_burst();
+      GHOST_IOS_diag_log("ghost: main_ios_callback returned");
+      /* Do NOT reactivate here: staged startup returns early while RNA/WM
+       * continue via dispatch_after. Reactivation runs after WM_init. */
     }
     @catch (NSException *exception) {
+      char exc[512];
+      snprintf(exc,
+               sizeof(exc),
+               "ghost: main_ios_callback NSException %s: %s",
+               exception.name.UTF8String,
+               exception.reason.UTF8String);
+      GHOST_IOS_diag_log(exc);
       fprintf(stderr,
               "[ios] main_ios_callback exception: %s - %s\n",
               exception.name.UTF8String,
@@ -347,8 +427,16 @@ static void ghost_ios_start_blender_main(const char *origin)
 
 /* Called from the SwiftUI host view controller (BlenderVisionApp.swift) once its
  * window is attached to a scene. */
+extern "C" void GHOST_IOS_pump_main_runloop(void);
+extern "C" void GHOST_IOS_yield_main_runloop(void);
+
 extern "C" void GHOST_IOS_StartBlenderFromSwiftUI(void)
 {
+  GHOST_IOS_diag_install_handlers();
+  GHOST_IOS_diag_log("ghost: GHOST_IOS_StartBlenderFromSwiftUI");
+  /* Feed the launch watchdog before any heavy Blender work. */
+  GHOST_IOS_pump_main_runloop();
+  GHOST_IOS_yield_main_runloop();
   if (g_ios_active_window_scene == nil) {
     g_ios_active_window_scene = ghost_ios_pick_active_window_scene();
   }
@@ -376,6 +464,104 @@ extern "C" void GHOST_IOS_StartBlenderFromSwiftUI(void)
   }
 
   ghost_ios_start_blender_main("swiftui");
+}
+
+/* Keep the compositor / launch watchdog fed while main_ios_callback blocks.
+ * Xcode disables the watchdog; TestFlight does not — hence "works in Xcode,
+ * dies immediately on device from TF".
+ *
+ * Important: a 0-second CFRunLoopRunInMode returns immediately when idle, so
+ * the compositor never gets frames and visionOS still kills us. Spend a short
+ * slice of real time on the runloop so UIKit/SwiftUI can paint. */
+extern "C" void GHOST_IOS_pump_main_runloop(void)
+{
+  if (![NSThread isMainThread]) {
+    return;
+  }
+  @autoreleasepool {
+    while (CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true) == kCFRunLoopRunHandledSource) {
+    }
+    /* ~2 frames of real yield for the launch/compositor watchdog. */
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.032, false);
+    CFRunLoopRunInMode(kCFRunLoopCommonModes, 0.0, true);
+  }
+}
+
+extern "C" void GHOST_IOS_yield_main_runloop(void)
+{
+  if (![NSThread isMainThread]) {
+    return;
+  }
+  @autoreleasepool {
+    __block BOOL done = NO;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      done = YES;
+    });
+    /* Nested main-queue item cannot run until we spin the runloop. */
+    const CFTimeInterval deadline = CFAbsoluteTimeGetCurrent() + 0.25;
+    while (!done && CFAbsoluteTimeGetCurrent() < deadline) {
+      CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+    }
+    GHOST_IOS_pump_main_runloop();
+  }
+}
+
+extern "C" void GHOST_IOS_schedule_on_main(void (*fn)(void *userdata), void *userdata)
+{
+  if (fn == nullptr) {
+    return;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    fn(userdata);
+  });
+}
+
+extern "C" void GHOST_IOS_schedule_on_main_after(void (*fn)(void *userdata),
+                                                 void *userdata,
+                                                 double delay_seconds)
+{
+  if (fn == nullptr) {
+    return;
+  }
+  if (delay_seconds < 0.0) {
+    delay_seconds = 0.0;
+  }
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay_seconds * NSEC_PER_SEC)),
+                 dispatch_get_main_queue(),
+                 ^{
+                   fn(userdata);
+                 });
+}
+
+extern "C" void GHOST_IOS_notify_launch_ui_ready(void)
+{
+  GHOST_IOS_diag_log("ghost: launch UI ready - reactivation burst");
+  ghost_ios_schedule_reactivation_burst();
+}
+
+extern "C" void GHOST_IOS_run_work_yielding(void (*fn)(void *), void *userdata)
+{
+  if (fn == nullptr) {
+    return;
+  }
+  /* Already off main: just run. */
+  if (![NSThread isMainThread]) {
+    fn(userdata);
+    return;
+  }
+  @autoreleasepool {
+    __block BOOL done = NO;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+      @autoreleasepool {
+        fn(userdata);
+      }
+      done = YES;
+    });
+    while (!done) {
+      CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+    }
+    GHOST_IOS_pump_main_runloop();
+  }
 }
 
 @implementation IOSSceneDelegate
@@ -540,11 +726,20 @@ extern "C" void GHOST_IOS_StartBlenderFromSwiftUI(void)
   if (!logged_first_draw) {
     fprintf(stderr, "[ios] first drawInMTKView (C=%p)\n", (void *)C);
     fflush(stderr);
+    if (C) {
+      GHOST_IOS_diag_log("ghost: first drawInMTKView with context");
+    }
+    else {
+      GHOST_IOS_diag_log("ghost: first drawInMTKView WITHOUT context");
+    }
     logged_first_draw = true;
   }
   else if ((draw_count % 300) == 0) {
     fprintf(stderr, "[ios] draw heartbeat count=%llu (C=%p)\n", (unsigned long long)draw_count, (void *)C);
     fflush(stderr);
+    char buf[80];
+    snprintf(buf, sizeof(buf), "ghost: draw heartbeat %llu", (unsigned long long)draw_count);
+    GHOST_IOS_diag_log(buf);
   }
 
   if (C) {
@@ -621,7 +816,24 @@ void GHOST_iosfinalize(bContext *CTX)
   fprintf(stderr, "[ios] GHOST_iosfinalize set context %p\n", (void *)CTX);
   fflush(stderr);
   C = CTX;
-  wm_context_ensure_from_main(C);
+  if (C) {
+    wm_context_ensure_from_main(C);
+  }
+  GHOST_IOS_diag_log("ghost: GHOST_iosfinalize context set");
+
+  /* Ensure the GHOST Metal window is key/visible above the SwiftUI host
+   * placeholder ("Blender を起動しています…"). */
+  GHOST_SystemIOS *system = static_cast<GHOST_SystemIOS *>(GHOST_ISystem::getSystem());
+  if (system != nullptr && system->current_active_window_ != nullptr) {
+    UIWindow *win = system->current_active_window_->rootWindow;
+    if (win != nil) {
+      win.windowLevel = UIWindowLevelNormal + 1;
+      [win makeKeyAndVisible];
+      system->current_active_window_->setRenderingPaused(false);
+      system->current_active_window_->needsDisplayUpdate();
+      GHOST_IOS_diag_log("ghost: GHOST window makeKeyAndVisible");
+    }
+  }
 }
 
 #pragma mark KeyMap, mouse converters
@@ -1051,24 +1263,39 @@ void GHOST_SystemIOS::pushHardwareModifierFlags(GHOST_IWindow *window, uint32_t 
 
 void GHOST_SystemIOS::pushHardwareCursorMove(GHOST_IWindow *window, int32_t x, int32_t y)
 {
+  pushHardwareCursorMove(window, x, y, GHOST_TABLET_DATA_NONE);
+}
+
+void GHOST_SystemIOS::pushHardwareCursorMove(GHOST_IWindow *window,
+                                             int32_t x,
+                                             int32_t y,
+                                             const GHOST_TabletData &tablet)
+{
   if (window == nullptr) {
     return;
   }
   notifyExternalEventProcessed();
   pushEvent(new GHOST_EventCursor(
-      getMilliSeconds(), GHOST_kEventCursorMove, window, x, y, GHOST_TABLET_DATA_NONE));
+      getMilliSeconds(), GHOST_kEventCursorMove, window, x, y, tablet));
 }
 
 void GHOST_SystemIOS::pushHardwareButtonEvent(GHOST_IWindow *window,
                                               GHOST_TEventType type,
                                               GHOST_TButton mask)
 {
+  pushHardwareButtonEvent(window, type, mask, GHOST_TABLET_DATA_NONE);
+}
+
+void GHOST_SystemIOS::pushHardwareButtonEvent(GHOST_IWindow *window,
+                                              GHOST_TEventType type,
+                                              GHOST_TButton mask,
+                                              const GHOST_TabletData &tablet)
+{
   if (window == nullptr) {
     return;
   }
   notifyExternalEventProcessed();
-  pushEvent(new GHOST_EventButton(
-      getMilliSeconds(), type, window, mask, GHOST_TABLET_DATA_NONE));
+  pushEvent(new GHOST_EventButton(getMilliSeconds(), type, window, mask, tablet));
 }
 
 #pragma mark Utility functions

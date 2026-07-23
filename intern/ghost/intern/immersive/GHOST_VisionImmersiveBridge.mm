@@ -20,6 +20,11 @@
 + (BOOL)dismissImmersiveSpace;
 + (BOOL)isActive;
 + (void)updateActiveObject:(NSString *)name x:(float)x y:(float)y z:(float)z;
++ (void)updateHandMenuMode:(int)mode
+                  strength:(float)strength
+                    radius:(float)radius
+                brushLabel:(NSString *)brushLabel
+                 brushKind:(int)brushKind;
 @end
 
 bool GHOST_Vision_immersive_space_is_supported(void)
@@ -73,6 +78,23 @@ void GHOST_Vision_update_active_object(const char *object_name,
   }
 }
 
+void GHOST_Vision_update_hand_menu(const int mode,
+                                   const float strength,
+                                   const float radius,
+                                   const char *brush_label,
+                                   const int brush_kind)
+{
+  @autoreleasepool {
+    NSString *label = (brush_label != nullptr) ? [NSString stringWithUTF8String:brush_label] :
+                                                 @"Draw";
+    [BlenderImmersiveBridge updateHandMenuMode:mode
+                                      strength:strength
+                                        radius:radius
+                                    brushLabel:label
+                                     brushKind:brush_kind];
+  }
+}
+
 #else
 
 bool GHOST_Vision_immersive_space_is_supported(void)
@@ -101,6 +123,14 @@ void GHOST_Vision_update_active_object(const char * /*object_name*/,
                                        const float /*blender_x*/,
                                        const float /*blender_y*/,
                                        const float /*blender_z*/)
+{
+}
+
+void GHOST_Vision_update_hand_menu(const int /*mode*/,
+                                   const float /*strength*/,
+                                   const float /*radius*/,
+                                   const char * /*brush_label*/,
+                                   const int /*brush_kind*/)
 {
 }
 

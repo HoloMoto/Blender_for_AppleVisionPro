@@ -25,16 +25,6 @@
 			</array>
 		</dict>
 	</array>
-	<!-- SwiftUI (BlenderVisionApp) owns the scene lifecycle on visionOS:
-	     no UISceneDelegateClassName here, and multiple scenes must be
-	     allowed so the ImmersiveSpace scene can open next to the window. -->
-	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
-	</dict>
-	<key>UIApplicationPreferredDefaultSceneSessionRole</key>
-	<string>UIWindowSceneSessionRoleApplication</string>
 	<key>CFBundleExecutable</key>
 	<string>Blender</string>
 	<key>CFBundleGetInfoString</key>
@@ -52,25 +42,38 @@
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+	<string>38</string>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>NSAccessoryTrackingUsageDescription</key>
+	<string>Blender tracks Logitech Muse to show a sculpt cursor in Immersive Space.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Blender uses the camera for Reality Kit immersive AR mode.</string>
+	<key>NSHandsTrackingUsageDescription</key>
+	<string>Blender uses hand tracking together with Muse accessory tracking in Immersive Space.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>UIViewControllerBasedStatusBarAppearance</key>
-	<false/>
-	<key>UIStatusBarHidden</key>
+	<key>NSMainCameraUsageDescription</key>
+	<string>Blender uses the main camera for Reality Kit immersive AR and Muse accessory tracking.</string>
+	<key>NSWorldSensingUsageDescription</key>
+	<string>Blender uses world sensing to place 3D content in your space.</string>
+	<key>UIApplicationPreferredDefaultSceneSessionRole</key>
+	<string>UIWindowSceneSessionRoleApplication</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+	</dict>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIFileSharingEnabled</key>
 	<true/>
-	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<key>UIStatusBarHidden</key>
 	<true/>
-	<key>NSCameraUsageDescription</key>
-	<string>Blender uses the camera for Reality Kit immersive AR mode.</string>
-	<key>NSWorldSensingUsageDescription</key>
-	<string>Blender uses world sensing to place 3D content in your space.</string>
 	<key>UISupportsDocumentBrowser</key>
 	<true/>
-	<key>LSSupportsOpeningDocumentsInPlace</key>
-	<true/>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
@@ -78,8 +81,6 @@
 			<array>
 				<string>public.data</string>
 			</array>
-			<key>UTTypeIdentifier</key>
-			<string>org.blenderfoundation.blender.file</string>
 			<key>UTTypeDescription</key>
 			<string>Blender File</string>
 			<key>UTTypeIcons</key>
@@ -89,6 +90,8 @@
 				<key>UTTypeIconText</key>
 				<string>blend</string>
 			</dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.blenderfoundation.blender.file</string>
 			<key>UTTypeTagSpecification</key>
 			<dict>
 				<key>public.filename-extension</key>

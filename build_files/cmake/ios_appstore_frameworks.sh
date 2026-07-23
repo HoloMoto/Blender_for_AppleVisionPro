@@ -88,6 +88,19 @@ wrap_dylib() {
   chmod +x "$dest_bin"
   plist_for "$name" "$full_id" >"$dest_dir/Info.plist"
   /usr/bin/install_name_tool -id "@rpath/${name}.framework/${name}" "$dest_bin" 2>/dev/null || true
+  # Sibling frameworks live in ../ relative to Foo.framework/Foo.
+  /usr/bin/install_name_tool -add_rpath '@loader_path/..' "$dest_bin" 2>/dev/null || true
+  # Strip absolute build-machine rpaths (useless/harmful on device).
+  /usr/bin/otool -l "$dest_bin" 2>/dev/null | /usr/bin/awk '
+    /cmd LC_RPATH/ { in_r=1; next }
+    in_r && /path / {
+      p=$2
+      if (p ~ /^\//) print p
+      in_r=0
+    }
+  ' | while read -r abs_rp; do
+    /usr/bin/install_name_tool -delete_rpath "$abs_rp" "$dest_bin" 2>/dev/null || true
+  done
   # Do NOT preserve old identifier; it must match CFBundleIdentifier (ITMS-90334).
   /usr/bin/codesign --force --sign "$ID" --identifier "$full_id" --timestamp=none "$dest_dir" || exit 1
 }
@@ -97,9 +110,12 @@ rm -rf "$FW_DIR"
 mkdir -p "$FW_DIR"
 
 # --- Bundled dylibs: Assets/lib/*.dylib -> Frameworks/<name>.framework ---
+# Prefer real files only (skip symlinks) so versioned aliases don't create
+# duplicate empty-ish frameworks that confuse codesign / thinning.
 if [ -d "$LIB_DIR" ]; then
   for dylib in "$LIB_DIR"/*.dylib; do
     [ -e "$dylib" ] || continue
+    [ -L "$dylib" ] && continue
     base="$(basename "$dylib" .dylib)"
     ft=$(macho_filetype "$dylib")
     case "$ft" in
@@ -113,6 +129,49 @@ if [ -d "$LIB_DIR" ]; then
         ;;
     esac
   done
+  # Drop leftover symlinks that pointed at wrapped dylibs.
+  find "$LIB_DIR" -maxdepth 1 -type l -name '*.dylib' -delete 2>/dev/null || true
+fi
+
+# --- OSL → LLVM/clang runtime deps (not copied into Assets/lib by default) ---
+# libosl*.framework link @rpath/libLTO|libRemarks|libclang*.framework. Missing
+# these does not break cold launch (Blender does not link OSL), but Cycles OSL
+# and any dlopen of OSL will dyld-fail without them. Stage from LIBDIR when set.
+LLVM_LIB_DIR="${BLENDER_LLVM_LIB_DIR:-}"
+if [ -z "$LLVM_LIB_DIR" ] && [ -n "${CMAKE_SOURCE_DIR:-}" ]; then
+  for cand in \
+    "${CMAKE_SOURCE_DIR}/lib/visionos_arm64/llvm/lib" \
+    "${CMAKE_SOURCE_DIR}/../lib/visionos_arm64/llvm/lib"
+  do
+    if [ -d "$cand" ]; then
+      LLVM_LIB_DIR="$cand"
+      break
+    fi
+  done
+fi
+# Infer from common checkout layout relative to this script when unset.
+if [ -z "$LLVM_LIB_DIR" ]; then
+  _script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+  for cand in \
+    "$_script_dir/../../lib/visionos_arm64/llvm/lib" \
+    "$_script_dir/../../../lib/visionos_arm64/llvm/lib"
+  do
+    if [ -d "$cand" ]; then
+      LLVM_LIB_DIR="$cand"
+      break
+    fi
+  done
+fi
+if [ -d "$LLVM_LIB_DIR" ]; then
+  for llvm_name in libLTO libRemarks libclang-cpp libclang; do
+    src="$LLVM_LIB_DIR/${llvm_name}.dylib"
+    if [ -f "$src" ] && [ ! -d "$FW_DIR/${llvm_name}.framework" ]; then
+      wrap_dylib "$src" "$llvm_name"
+      echo "ios_appstore_frameworks: staged LLVM $llvm_name.framework"
+    fi
+  done
+else
+  echo "ios_appstore_frameworks: WARNING LLVM lib dir not found (OSL may fail to load)" >&2
 fi
 
 # Rewrite @rpath/libFoo.dylib -> @rpath/libFoo.framework/libFoo on Blender + frameworks.
@@ -151,6 +210,17 @@ for fwbin in "$FW_DIR"/*.framework/*; do
     */Info.plist) continue ;;
   esac
   rewrite_deps "$fwbin"
+  /usr/bin/install_name_tool -add_rpath '@loader_path/..' "$fwbin" 2>/dev/null || true
+  /usr/bin/otool -l "$fwbin" 2>/dev/null | /usr/bin/awk '
+    /cmd LC_RPATH/ { in_r=1; next }
+    in_r && /path / {
+      p=$2
+      if (p ~ /^\//) print p
+      in_r=0
+    }
+  ' | while read -r abs_rp; do
+    /usr/bin/install_name_tool -delete_rpath "$abs_rp" "$fwbin" 2>/dev/null || true
+  done
   # Re-sign after install_name_tool (invalidates signature).
   fwdir=$(dirname "$fwbin")
   name=$(basename "$fwbin")
@@ -198,5 +268,31 @@ done
 
 # Final sweep: no raw Mach-O under Assets.
 find "$ASSETS" \( -name '*.so' -o -name '*.dylib' -o -name '*.o' -o -name '*.a' \) -type f -delete 2>/dev/null || true
+
+# libusd_ms is built with PXR_BUILD_LOCATION=usd (relative to the dylib).
+# Plug_InitConfig runs at load time — before any setenv — so plugInfo must live at:
+#   Frameworks/libusd_ms.framework/usd
+#
+# Do NOT stage under Frameworks/plugin/ — App Store Connect rejects non-framework
+# entries there (ITMS-90432). Extra USD plugins stay under Assets/lib/usd_plugin
+# and are found via PXR_PLUGINPATH_NAME at runtime (see creator.cc).
+USD_FW="$FW_DIR/libusd_ms.framework"
+USD_SRC=""
+for cand in "$LIB_DIR/usd" "$ASSETS"/*/datafiles/usd; do
+  if [ -d "$cand" ] && [ -f "$cand/plugInfo.json" ]; then
+    USD_SRC="$cand"
+    break
+  fi
+done
+if [ -d "$USD_FW" ] && [ -n "$USD_SRC" ]; then
+  mkdir -p "$USD_FW/usd"
+  /bin/cp -R "$USD_SRC/." "$USD_FW/usd/"
+  echo "ios_appstore_frameworks: staged USD plugInfo -> libusd_ms.framework/usd"
+fi
+# Remove any leftover illegal Frameworks/plugin from older packaging.
+if [ -e "$FW_DIR/plugin" ]; then
+  /bin/rm -rf "$FW_DIR/plugin"
+  echo "ios_appstore_frameworks: removed Frameworks/plugin (App Store illegal)"
+fi
 
 echo "ios_appstore_frameworks: staged $(ls -1 "$FW_DIR" 2>/dev/null | wc -l | tr -d ' ') dylib frameworks; python extensions gzipped"

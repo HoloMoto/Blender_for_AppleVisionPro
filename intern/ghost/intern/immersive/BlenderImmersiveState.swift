@@ -7,6 +7,7 @@
  */
 
 import Foundation
+import simd
 
 public let BlenderImmersiveSpaceID = "blender.scene.immersive"
 
@@ -17,6 +18,8 @@ public extension Notification.Name {
     "blender.immersiveModelPathChanged")
   static let blenderImmersiveActiveObjectChanged = Notification.Name(
     "blender.immersiveActiveObjectChanged")
+  static let blenderImmersiveHandMenuChanged = Notification.Name(
+    "blender.immersiveHandMenuChanged")
 }
 
 @objc public final class BlenderImmersiveState: NSObject {
@@ -29,9 +32,31 @@ public extension Notification.Name {
   @objc public private(set) var activeObjectX: Float = 0
   @objc public private(set) var activeObjectY: Float = 0
   @objc public private(set) var activeObjectZ: Float = 0
+  /** Immersive scene placement offset (meters). Used by Muse → Blender projection. */
+  @objc public private(set) var placementX: Float = 0
+  @objc public private(set) var placementY: Float = 0
+  @objc public private(set) var placementZ: Float = 0
+
+  /** 0 object / 1 edit / 2 sculpt */
+  @objc public private(set) var handMenuMode: Int = 0
+  @objc public private(set) var handMenuStrength: Float = 0.5
+  @objc public private(set) var handMenuRadius: Float = 0.25
+  /** 0 Draw / 1 Clay / 2 Grab / 3 Smooth / 4 Inflate+ / 5 Inflate− */
+  @objc public private(set) var handMenuBrushKind: Int = 4
+  @objc public private(set) var handMenuBrushLabel: String = "Inflate+"
+
+  public var placementOffset: SIMD3<Float> {
+    SIMD3(placementX, placementY, placementZ)
+  }
 
   private override init() {
     super.init()
+  }
+
+  @objc public func updatePlacement(x: Float, y: Float, z: Float) {
+    placementX = x
+    placementY = y
+    placementZ = z
   }
 
   @objc public func updateModelPath(_ path: String?) {
@@ -54,5 +79,16 @@ public extension Notification.Name {
       name: .blenderImmersiveActiveObjectChanged,
       object: nil,
       userInfo: ["name": name ?? "", "x": x, "y": y, "z": z])
+  }
+
+  @objc public func updateHandMenu(
+    mode: Int, strength: Float, radius: Float, brushLabel: String?, brushKind: Int
+  ) {
+    handMenuMode = mode
+    handMenuStrength = strength
+    handMenuRadius = radius
+    handMenuBrushLabel = brushLabel ?? "Draw"
+    handMenuBrushKind = brushKind
+    NotificationCenter.default.post(name: .blenderImmersiveHandMenuChanged, object: nil)
   }
 }

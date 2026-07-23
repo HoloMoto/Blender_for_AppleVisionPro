@@ -23,12 +23,22 @@ import UIKit
     @UIApplicationDelegateAdaptor(BlenderUIKitAppDelegate.self) private var appDelegate
     @State private var immersionStyle: ImmersionStyle = .mixed
 
+    init() {
+      /* Pure Swift only — do not call into GHOST/C++ here.
+       * TestFlight often kills the process before ObjC++ is safe; if Documents
+       * never appears, the crash was before this bootstrap completed. */
+      BlenderIOSDiagnosticLog.installSwiftBootstrap()
+      BlenderIOSDiagnosticLog.bootSwiftOnly("BlenderVisionApp init")
+    }
+
     var body: some Scene {
       WindowGroup {
         BlenderUIKitRootRepresentable()
           .ignoresSafeArea()
       }
 
+      /* Immersive content stays lazy: the view body runs when the space opens,
+       * not during the initial WindowGroup paint. */
       ImmersiveSpace(id: BlenderImmersiveSpaceID) {
         BlenderImmersiveSpaceView()
       }
@@ -42,8 +52,9 @@ import UIKit
       _ application: UIApplication,
       didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-      /* Window / MTKView creation continues through the existing UIKit scene path
-       * once Blender finishes GHOST init. */
+      BlenderIOSDiagnosticLog.bootSwiftOnly("UIApplication didFinishLaunching begin")
+      BlenderIOSDiagnosticLog.installCHandlers()
+      BlenderIOSDiagnosticLog.boot("swift: UIApplication didFinishLaunching")
       return true
     }
   }
@@ -51,20 +62,45 @@ import UIKit
   /// Host view controller: starts Blender once its window is attached to a scene.
   final class BlenderHostViewController: UIViewController {
     private var startedBlender = false
+    private let statusLabel = UILabel()
+
+    override func viewDidLoad() {
+      super.viewDidLoad()
+      BlenderIOSDiagnosticLog.boot("swift: BlenderHostViewController viewDidLoad")
+      view.backgroundColor = .black
+      statusLabel.text = "Blender を起動しています…"
+      statusLabel.textColor = .white
+      statusLabel.textAlignment = .center
+      statusLabel.translatesAutoresizingMaskIntoConstraints = false
+      view.addSubview(statusLabel)
+      NSLayoutConstraint.activate([
+        statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+        statusLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+      ])
+    }
 
     override func viewDidAppear(_ animated: Bool) {
       super.viewDidAppear(animated)
-      startBlenderWhenSceneReady()
+      BlenderIOSDiagnosticLog.boot("swift: BlenderHostViewController viewDidAppear")
+      /* Give visionOS launch transition + first compositor frames time to land
+       * before Blender monopolizes the main thread (TestFlight watchdog). */
+      DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+        self?.startBlenderWhenSceneReady()
+      }
     }
 
     private func startBlenderWhenSceneReady() {
       guard !startedBlender else { return }
       if view.window?.windowScene != nil {
         startedBlender = true
-        GHOST_IOS_StartBlenderFromSwiftUI()
+        BlenderIOSDiagnosticLog.boot("swift: calling GHOST_IOS_StartBlenderFromSwiftUI")
+        /* One more main-queue hop so the status label can paint first. */
+        DispatchQueue.main.async {
+          GHOST_IOS_StartBlenderFromSwiftUI()
+        }
       }
       else {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
           self?.startBlenderWhenSceneReady()
         }
       }
@@ -75,7 +111,6 @@ import UIKit
   struct BlenderUIKitRootRepresentable: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
       let vc = BlenderHostViewController()
-      vc.view.backgroundColor = .black
       /* Immersive open/dismiss is driven by notifications from GHOST. */
       let host = UIHostingController(rootView: BlenderImmersiveLauncher())
       host.view.backgroundColor = .clear

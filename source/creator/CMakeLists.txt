@@ -486,6 +486,9 @@ elseif(APPLE)
       COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}"
       COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/scripts" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/scripts"
       COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/release/datafiles" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/datafiles"
+      # Essentials asset library (sculpt/paint brushes). Required for Sculpt Mode.
+      # `xcodebuild` skips install() rules, so stage assets here like scripts/datafiles.
+      COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/datafiles/assets"
       COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/datafiles/locale"
       COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/locale/po" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/datafiles/locale/po"
       COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/locale/languages" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/datafiles/locale/languages"
@@ -574,7 +577,9 @@ elseif(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${LIBDIR}/usd/lib/usd" "$<TARGET_BUNDLE_DIR:blender>/Assets/lib/usd"
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/datafiles/usd"
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${LIBDIR}/usd/lib/usd" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/datafiles/usd"
-        COMMENT "Stage USD plugInfo registry into iOS bundle"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:blender>/Assets/lib/usd_plugin"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${LIBDIR}/usd/plugin/usd" "$<TARGET_BUNDLE_DIR:blender>/Assets/lib/usd_plugin"
+        COMMENT "Stage USD plugInfo registry into iOS bundle Assets"
         VERBATIM
       )
       if(EXISTS "${LIBDIR}/materialx/libraries")
@@ -2132,6 +2137,56 @@ endif()
 add_dependencies(blender makesdna)
 target_link_libraries(blender PRIVATE ${LIB})
 unset(LIB)
+
+# visionOS/iOS: libusd_ms.dylib has undefined CPython symbols (built with
+# -undefined dynamic_lookup). They must resolve from the main executable at
+# dyld load time. Release/Archive enables -dead_strip; even -force_load early
+# in the link line is not enough when libpython is also linked again later —
+# TestFlight binaries ended up with ZERO Py* symbols and aborted before main
+# (`symbol not found: _PyBaseObject_Type`), with no crash report and no Documents.
+if(WITH_APPLE_CROSSPLATFORM AND WITH_USD AND WITH_PYTHON AND PYTHON_LIBRARY)
+  if(EXISTS "${PYTHON_LIBRARY}")
+    # Disable dead-strip / post-link strip for the app target.
+    # Xcode Archive's STRIP_INSTALLED_PRODUCT otherwise removes every Py*
+    # AFTER link (verified: 129MB with Py → 95MB xcarchive with ZERO Py).
+    set_target_properties(blender PROPERTIES
+      XCODE_ATTRIBUTE_DEAD_CODE_STRIPPING "NO"
+      XCODE_ATTRIBUTE_STRIP_INSTALLED_PRODUCT "NO"
+      XCODE_ATTRIBUTE_COPY_PHASE_STRIP "NO"
+      XCODE_ATTRIBUTE_DEPLOYMENT_POSTPROCESSING "NO"
+      XCODE_ATTRIBUTE_STRIP_STYLE "debugging"
+    )
+    # force_load LAST so symbols survive subsequent archive stripping passes.
+    # Do NOT use -exported_symbol here: it conflicts with PLATFORM's
+    # -unexported_symbols_list (ld error on Apple).
+    target_link_options(blender PRIVATE
+      "LINKER:-force_load,${PYTHON_LIBRARY}"
+    )
+    message(STATUS
+      "iOS USD: force_load ${PYTHON_LIBRARY}; DEAD_CODE_STRIPPING=NO; STRIP_INSTALLED_PRODUCT=NO")
+
+    # Fail the build if Release still strips Python — catch TF crash before upload.
+    add_custom_command(TARGET blender POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E echo "Verifying CPython exports for USD…"
+      COMMAND /bin/sh -c
+        "nm -gU \"$<TARGET_FILE:blender>\" | grep -F '_PyBaseObject_Type' >/dev/null || \
+         (echo 'ERROR: _PyBaseObject_Type missing from Blender — USD will dyld-abort on device' >&2; exit 1)"
+      COMMENT "Verify _PyBaseObject_Type is exported for libusd_ms"
+      VERBATIM
+    )
+  endif()
+endif()
+
+# Legacy path kept for PYTHON_LIBRARIES list forms (no-op if PYTHON_LIBRARY handled).
+if(WITH_APPLE_CROSSPLATFORM AND WITH_USD AND WITH_PYTHON AND PYTHON_LIBRARIES AND NOT PYTHON_LIBRARY)
+  foreach(_py_lib ${PYTHON_LIBRARIES})
+    if(EXISTS "${_py_lib}")
+      target_link_libraries(blender PRIVATE "-Wl,-force_load,${_py_lib}")
+      message(STATUS "iOS USD: force_load ${_py_lib} so libusd_ms can resolve CPython symbols")
+    endif()
+  endforeach()
+  unset(_py_lib)
+endif()
 
 setup_platform_linker_flags(blender)
 setup_platform_linker_libs(blender)

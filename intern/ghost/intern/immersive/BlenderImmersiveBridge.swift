@@ -48,4 +48,20 @@ public final class BlenderImmersiveBridge: NSObject {
       }
     #endif
   }
+
+  @objc(updateHandMenuMode:strength:radius:brushLabel:brushKind:)
+  public static func updateHandMenuMode(
+    _ mode: Int32, strength: Float, radius: Float, brushLabel: String?, brushKind: Int32
+  ) {
+    #if os(visionOS)
+      DispatchQueue.main.async {
+        BlenderImmersiveState.shared.updateHandMenu(
+          mode: Int(mode),
+          strength: strength,
+          radius: radius,
+          brushLabel: brushLabel,
+          brushKind: Int(brushKind))
+      }
+    #endif
+  }
 }

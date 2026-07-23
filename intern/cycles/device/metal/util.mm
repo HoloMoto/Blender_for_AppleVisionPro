@@ -11,10 +11,12 @@
 #  include "util/string.h"
 #  include "util/time.h"
 
-#  include <IOKit/IOKitLib.h>
+#  ifndef WITH_APPLE_CROSSPLATFORM
+#    include <IOKit/IOKitLib.h>
+#    include <pwd.h>
+#    include <sys/shm.h>
+#  endif
 #  include <ctime>
-#  include <pwd.h>
-#  include <sys/shm.h>
 
 CCL_NAMESPACE_BEGIN
 
@@ -34,6 +36,11 @@ string MetalInfo::get_device_name(id<MTLDevice> device)
 
 int MetalInfo::get_apple_gpu_core_count(id<MTLDevice> device)
 {
+#  ifdef WITH_APPLE_CROSSPLATFORM
+  /* IOKit registry APIs are not available / safe to link on iOS/visionOS. */
+  (void)device;
+  return 0;
+#  else
   int core_count = 0;
   if (@available(macos 12.0, *)) {
     io_service_t gpu_service = IOServiceGetMatchingService(
@@ -48,6 +55,7 @@ int MetalInfo::get_apple_gpu_core_count(id<MTLDevice> device)
     }
   }
   return core_count;
+#  endif
 }
 
 AppleGPUArchitecture MetalInfo::get_apple_gpu_architecture(id<MTLDevice> device)

@@ -18,6 +18,7 @@
 #include <cstring>
 #include <mutex>
 #include <sstream>
+#include <vector>
 
 #include <fmt/format.h>
 
@@ -35,6 +36,8 @@
 #include "DNA_ID.h"
 #include "DNA_armature_types.h"
 #include "DNA_brush_types.h"
+#include "DNA_brush_enums.h"
+#include "DNA_mesh_types.h"
 #include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 #include "DNA_screen_types.h"
@@ -46,6 +49,7 @@
 #include "BLI_dial_2d.h"
 #include "BLI_fileops.hh"
 #include "BLI_listbase.h"
+#include "BLI_math_matrix.h"
 #include "BLI_math_rotation.h"
 #include "BLI_math_vector.h"
 #include "BLI_math_vector_types.hh"
@@ -69,6 +73,9 @@
 #include "BKE_library.hh"
 #include "BKE_main.hh"
 #include "BKE_material.hh"
+#include "BKE_mesh.hh"
+#include "BKE_paint.hh"
+#include "BKE_paint_types.hh"
 #include "BKE_preview_image.hh"
 #include "BKE_report.hh"
 #include "BKE_scene.hh"
@@ -88,10 +95,21 @@
 #include "ED_fileselect.hh"
 #include "ED_gpencil_legacy.hh"
 #include "ED_grease_pencil.hh"
+#include "ED_mesh.hh"
 #include "ED_numinput.hh"
 #include "ED_screen.hh"
 #include "ED_undo.hh"
 #include "ED_view3d.hh"
+
+#if defined(WITH_APPLE_CROSSPLATFORM)
+#  include "BKE_attribute.h"
+#  include "BKE_attribute.hh"
+#  include "BKE_attribute_math.hh"
+#  include "BKE_editmesh.hh"
+#  include "BLI_color_types.hh"
+#  include "ED_object.hh"
+#  include "bmesh.hh"
+#endif
 
 #include "DEG_depsgraph_query.hh"
 #include "DEG_depsgraph.hh"
@@ -4217,6 +4235,21 @@ struct WMIOSImmersivePendingMove {
 
 static WMIOSImmersivePendingMove g_wm_ios_immersive_pending_move;
 
+struct WMIOSImmersiveMuseSample {
+  std::mutex mutex;
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float pressure = 0.0f;
+  int tip_pressed = 0;
+  bool pending = false;
+};
+
+static WMIOSImmersiveMuseSample g_wm_ios_immersive_muse_sample;
+static bool g_wm_ios_muse_stroke_active = false;
+static bool g_wm_ios_muse_tip_down = false;
+static bool g_wm_ios_muse_tip_just_released = false;
+
 /**
  * Called by BlenderImmersiveSpaceView.swift while dragging an entity. Queue the
  * change instead of touching Blender DNA from SwiftUI/RealityKit callbacks.
@@ -4230,6 +4263,967 @@ extern "C" void WM_IOS_immersive_set_object_z(const char *object_name, const flo
   g_wm_ios_immersive_pending_move.object_name = object_name;
   g_wm_ios_immersive_pending_move.z = z;
   g_wm_ios_immersive_pending_move.pending = true;
+}
+
+/**
+ * Called by BlenderImmersiveMusePen.swift (~60 Hz). Queue the latest Muse tip
+ * sample for consumption on the Blender main/draw loop.
+ */
+extern "C" void WM_IOS_immersive_muse_sample(const float x,
+                                             const float y,
+                                             const float z,
+                                             const float pressure,
+                                             const int tip_pressed)
+{
+  std::lock_guard lock(g_wm_ios_immersive_muse_sample.mutex);
+  g_wm_ios_immersive_muse_sample.x = x;
+  g_wm_ios_immersive_muse_sample.y = y;
+  g_wm_ios_immersive_muse_sample.z = z;
+  g_wm_ios_immersive_muse_sample.pressure = pressure;
+  g_wm_ios_immersive_muse_sample.tip_pressed = tip_pressed;
+  g_wm_ios_immersive_muse_sample.pending = true;
+}
+
+/** Muse / hand-menu brush style used by Immersive 3D deform. */
+enum {
+  WMIOS_MUSE_BRUSH_DRAW = 0,
+  WMIOS_MUSE_BRUSH_CLAY = 1,
+  WMIOS_MUSE_BRUSH_GRAB = 2,
+  WMIOS_MUSE_BRUSH_SMOOTH = 3,
+  WMIOS_MUSE_BRUSH_INFLATE_ADD = 4,
+  WMIOS_MUSE_BRUSH_INFLATE_SUB = 5,
+};
+
+struct WMIOSImmersiveHandMenuPending {
+  std::mutex mutex;
+  bool pending_mode = false;
+  int mode = 0; /* 0 object, 1 edit, 2 sculpt */
+  bool pending_brush = false;
+  int brush_kind = WMIOS_MUSE_BRUSH_INFLATE_ADD;
+  char brush_tool_id[64] = "builtin_brush.Inflate";
+  bool pending_strength = false;
+  float strength = 0.5f;
+  bool pending_radius = false;
+  float radius = 0.25f;
+  bool pending_dismiss = false;
+};
+
+static WMIOSImmersiveHandMenuPending g_wm_ios_hand_menu_cmd;
+static int g_wm_ios_muse_brush_kind = WMIOS_MUSE_BRUSH_INFLATE_ADD;
+static bool g_wm_ios_muse_vpaint_erase = false;
+struct WMIOSMuseSculptVert {
+  int index;
+  float weight;
+};
+static std::vector<WMIOSMuseSculptVert> g_wm_ios_muse_sculpt_verts;
+
+static const char *wm_ios_muse_tool_id_for_kind(const int kind)
+{
+  switch (kind) {
+    case WMIOS_MUSE_BRUSH_CLAY:
+      return "builtin_brush.Clay";
+    case WMIOS_MUSE_BRUSH_GRAB:
+      return "builtin_brush.Grab";
+    case WMIOS_MUSE_BRUSH_SMOOTH:
+      return "builtin_brush.Smooth";
+    case WMIOS_MUSE_BRUSH_INFLATE_ADD:
+    case WMIOS_MUSE_BRUSH_INFLATE_SUB:
+      return "builtin_brush.Inflate";
+    case WMIOS_MUSE_BRUSH_DRAW:
+    default:
+      return "builtin_brush.Draw";
+  }
+}
+
+static void wm_ios_muse_queue_brush_kind(const int kind)
+{
+  std::lock_guard lock(g_wm_ios_hand_menu_cmd.mutex);
+  STRNCPY(g_wm_ios_hand_menu_cmd.brush_tool_id, wm_ios_muse_tool_id_for_kind(kind));
+  g_wm_ios_hand_menu_cmd.brush_kind = kind;
+  g_wm_ios_hand_menu_cmd.pending_brush = true;
+}
+
+extern "C" void WM_IOS_immersive_hand_menu_set_mode(const int mode)
+{
+  std::lock_guard lock(g_wm_ios_hand_menu_cmd.mutex);
+  g_wm_ios_hand_menu_cmd.mode = mode;
+  g_wm_ios_hand_menu_cmd.pending_mode = true;
+}
+
+extern "C" void WM_IOS_immersive_hand_menu_set_brush(const char *tool_id, const int kind)
+{
+  std::lock_guard lock(g_wm_ios_hand_menu_cmd.mutex);
+  if (tool_id != nullptr && tool_id[0] != '\0') {
+    STRNCPY(g_wm_ios_hand_menu_cmd.brush_tool_id, tool_id);
+  }
+  else {
+    STRNCPY(g_wm_ios_hand_menu_cmd.brush_tool_id, wm_ios_muse_tool_id_for_kind(kind));
+  }
+  g_wm_ios_hand_menu_cmd.brush_kind = kind;
+  g_wm_ios_hand_menu_cmd.pending_brush = true;
+}
+
+/** Pen front button: cycle Inflate+ → Inflate− → Smooth. */
+extern "C" void WM_IOS_immersive_muse_cycle_brush()
+{
+  int next = WMIOS_MUSE_BRUSH_INFLATE_ADD;
+  switch (g_wm_ios_muse_brush_kind) {
+    case WMIOS_MUSE_BRUSH_INFLATE_ADD:
+      next = WMIOS_MUSE_BRUSH_INFLATE_SUB;
+      break;
+    case WMIOS_MUSE_BRUSH_INFLATE_SUB:
+      next = WMIOS_MUSE_BRUSH_SMOOTH;
+      break;
+    case WMIOS_MUSE_BRUSH_SMOOTH:
+    default:
+      next = WMIOS_MUSE_BRUSH_INFLATE_ADD;
+      break;
+  }
+  wm_ios_muse_queue_brush_kind(next);
+}
+
+/** Pen middle button: toggle Inflate add ↔ subtract (or jump to Inflate+). */
+extern "C" void WM_IOS_immersive_muse_toggle_inflate_direction()
+{
+  int next = WMIOS_MUSE_BRUSH_INFLATE_ADD;
+  if (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_INFLATE_ADD) {
+    next = WMIOS_MUSE_BRUSH_INFLATE_SUB;
+  }
+  else if (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_INFLATE_SUB) {
+    next = WMIOS_MUSE_BRUSH_INFLATE_ADD;
+  }
+  wm_ios_muse_queue_brush_kind(next);
+}
+
+/** Pen middle button while Vertex Paint: toggle paint ↔ erase. */
+extern "C" void WM_IOS_immersive_muse_toggle_vpaint_erase()
+{
+  g_wm_ios_muse_vpaint_erase = !g_wm_ios_muse_vpaint_erase;
+}
+
+extern "C" void WM_IOS_immersive_hand_menu_set_strength(const float strength)
+{
+  std::lock_guard lock(g_wm_ios_hand_menu_cmd.mutex);
+  g_wm_ios_hand_menu_cmd.strength = std::clamp(strength, 0.01f, 1.0f);
+  g_wm_ios_hand_menu_cmd.pending_strength = true;
+}
+
+extern "C" void WM_IOS_immersive_hand_menu_set_radius(const float radius_m)
+{
+  std::lock_guard lock(g_wm_ios_hand_menu_cmd.mutex);
+  g_wm_ios_hand_menu_cmd.radius = std::clamp(radius_m, 0.01f, 2.0f);
+  g_wm_ios_hand_menu_cmd.pending_radius = true;
+}
+
+extern "C" void WM_IOS_immersive_hand_menu_dismiss()
+{
+  std::lock_guard lock(g_wm_ios_hand_menu_cmd.mutex);
+  g_wm_ios_hand_menu_cmd.pending_dismiss = true;
+}
+
+static ScrArea *wm_ios_immersive_find_view3d_area(bContext *C)
+{
+  wmWindow *win = CTX_wm_window(C);
+  if (win == nullptr) {
+    return nullptr;
+  }
+  bScreen *screen = WM_window_get_active_screen(win);
+  if (screen == nullptr) {
+    return nullptr;
+  }
+  LISTBASE_FOREACH (ScrArea *, area, &screen->areabase) {
+    if (area->spacetype == SPACE_VIEW3D) {
+      return area;
+    }
+  }
+  return nullptr;
+}
+
+static ARegion *wm_ios_immersive_find_view3d_window_region(ScrArea *area)
+{
+  if (area == nullptr) {
+    return nullptr;
+  }
+  LISTBASE_FOREACH (ARegion *, region, &area->regionbase) {
+    if (region->regiontype == RGN_TYPE_WINDOW && region->regiondata != nullptr) {
+      return region;
+    }
+  }
+  return nullptr;
+}
+
+static void wm_ios_immersive_muse_end_stroke(const int ghost_x,
+                                             const int ghost_y,
+                                             const float pressure)
+{
+  if (!g_wm_ios_muse_stroke_active) {
+    return;
+  }
+  GHOST_IOS_push_tablet_cursor(ghost_x, ghost_y, pressure);
+  GHOST_IOS_push_tablet_button(false, pressure);
+  g_wm_ios_muse_stroke_active = false;
+}
+
+static float g_wm_ios_muse_edit_last_local[3] = {0.0f, 0.0f, 0.0f};
+static bool g_wm_ios_muse_edit_dragging = false;
+
+static float g_wm_ios_muse_sculpt_last_local[3] = {0.0f, 0.0f, 0.0f};
+static bool g_wm_ios_muse_sculpt_dragging = false;
+static bool g_wm_ios_muse_vpaint_dragging = false;
+static int g_wm_ios_muse_last_mode = 0;
+
+static void wm_ios_immersive_muse_cancel_interaction()
+{
+  g_wm_ios_muse_edit_dragging = false;
+  g_wm_ios_muse_sculpt_dragging = false;
+  g_wm_ios_muse_vpaint_dragging = false;
+  g_wm_ios_muse_sculpt_verts.clear();
+  g_wm_ios_muse_stroke_active = false;
+}
+
+static bool wm_ios_immersive_muse_interaction_active()
+{
+  return g_wm_ios_muse_edit_dragging || g_wm_ios_muse_sculpt_dragging ||
+         g_wm_ios_muse_vpaint_dragging;
+}
+
+static void wm_ios_immersive_publish_hand_menu_state(bContext *C, Object *ob)
+{
+  int mode = 0;
+  if (ob != nullptr) {
+    if (ob->mode & OB_MODE_VERTEX_PAINT) {
+      mode = 3;
+    }
+    else if (ob->mode & OB_MODE_SCULPT) {
+      mode = 2;
+    }
+    else if (ob->mode & OB_MODE_EDIT) {
+      mode = 1;
+    }
+  }
+  float strength = 0.5f;
+  float radius = 0.25f;
+  const char *brush_label = "Inflate+";
+  if (mode == 3) {
+    brush_label = g_wm_ios_muse_vpaint_erase ? "VPaint Erase" : "VPaint";
+  }
+  else {
+    switch (g_wm_ios_muse_brush_kind) {
+      case WMIOS_MUSE_BRUSH_INFLATE_ADD:
+        brush_label = "Inflate+";
+        break;
+      case WMIOS_MUSE_BRUSH_INFLATE_SUB:
+        brush_label = "Inflate-";
+        break;
+      case WMIOS_MUSE_BRUSH_SMOOTH:
+        brush_label = "Smooth";
+        break;
+      case WMIOS_MUSE_BRUSH_GRAB:
+        brush_label = "Grab";
+        break;
+      case WMIOS_MUSE_BRUSH_CLAY:
+        brush_label = "Clay";
+        break;
+      default:
+        brush_label = "Draw";
+        break;
+    }
+  }
+  if (Scene *scene = CTX_data_scene(C)) {
+    const PaintMode paint_mode = (mode == 3) ? PaintMode::Vertex : PaintMode::Sculpt;
+    if (Paint *paint = BKE_paint_get_active_from_paintmode(scene, paint_mode)) {
+      if (Brush *brush = BKE_paint_brush(paint)) {
+        strength = BKE_brush_alpha_get(paint, brush);
+        const float unprojected = BKE_brush_unprojected_radius_get(paint, brush);
+        if (unprojected > 1.0e-4f) {
+          radius = unprojected;
+        }
+      }
+    }
+  }
+  GHOST_IOS_immersive_update_hand_menu(
+      mode, strength, radius, brush_label, g_wm_ios_muse_brush_kind);
+}
+
+static void wm_ios_immersive_apply_hand_menu(bContext *C)
+{
+  bool pending_mode = false;
+  int mode = 0;
+  bool pending_brush = false;
+  int brush_kind = WMIOS_MUSE_BRUSH_DRAW;
+  char brush_tool_id[64] = "";
+  bool pending_strength = false;
+  float strength = 0.5f;
+  bool pending_radius = false;
+  float radius = 0.25f;
+  bool pending_dismiss = false;
+  {
+    std::lock_guard lock(g_wm_ios_hand_menu_cmd.mutex);
+    pending_mode = g_wm_ios_hand_menu_cmd.pending_mode;
+    mode = g_wm_ios_hand_menu_cmd.mode;
+    pending_brush = g_wm_ios_hand_menu_cmd.pending_brush;
+    brush_kind = g_wm_ios_hand_menu_cmd.brush_kind;
+    STRNCPY(brush_tool_id, g_wm_ios_hand_menu_cmd.brush_tool_id);
+    pending_strength = g_wm_ios_hand_menu_cmd.pending_strength;
+    strength = g_wm_ios_hand_menu_cmd.strength;
+    pending_radius = g_wm_ios_hand_menu_cmd.pending_radius;
+    radius = g_wm_ios_hand_menu_cmd.radius;
+    pending_dismiss = g_wm_ios_hand_menu_cmd.pending_dismiss;
+    g_wm_ios_hand_menu_cmd.pending_mode = false;
+    g_wm_ios_hand_menu_cmd.pending_brush = false;
+    g_wm_ios_hand_menu_cmd.pending_strength = false;
+    g_wm_ios_hand_menu_cmd.pending_radius = false;
+    g_wm_ios_hand_menu_cmd.pending_dismiss = false;
+  }
+
+  if (!(pending_mode || pending_brush || pending_strength || pending_radius || pending_dismiss)) {
+    /* Still publish periodically so the hand menu stays in sync. */
+    static double last_publish = 0.0;
+    const double now = BLI_time_now_seconds();
+    if (now - last_publish >= 0.5) {
+      last_publish = now;
+      wm_ios_immersive_publish_hand_menu_state(C, CTX_data_active_object(C));
+    }
+    return;
+  }
+
+  if (pending_dismiss) {
+    GHOST_IOS_set_immersive_mode_enabled(false, nullptr);
+    return;
+  }
+
+  ScrArea *area = wm_ios_immersive_find_view3d_area(C);
+  ARegion *region = wm_ios_immersive_find_view3d_window_region(area);
+  ScrArea *area_prev = CTX_wm_area(C);
+  ARegion *region_prev = CTX_wm_region(C);
+  if (area != nullptr) {
+    CTX_wm_area_set(C, area);
+  }
+  if (region != nullptr) {
+    CTX_wm_region_set(C, region);
+  }
+
+  Object *ob = CTX_data_active_object(C);
+  if (pending_mode && ob != nullptr && ob->type == OB_MESH) {
+    const eObjectMode target = (mode == 3) ? OB_MODE_VERTEX_PAINT :
+                               (mode == 2) ? OB_MODE_SCULPT :
+                               (mode == 1) ? OB_MODE_EDIT :
+                                             OB_MODE_OBJECT;
+    wm_ios_immersive_muse_cancel_interaction();
+    g_wm_ios_muse_vpaint_erase = false;
+    blender::ed::object::mode_set(C, target);
+    ob = CTX_data_active_object(C);
+    /* Entering Sculpt from VPaint/Object must re-bind the Muse brush tool, otherwise
+     * the previous Vertex Paint session can leave sculpt looking inert. */
+    if (mode == 2) {
+      pending_brush = true;
+      brush_kind = g_wm_ios_muse_brush_kind;
+      STRNCPY(brush_tool_id, wm_ios_muse_tool_id_for_kind(brush_kind));
+    }
+  }
+
+  if (pending_brush) {
+    g_wm_ios_muse_brush_kind = brush_kind;
+    g_wm_ios_muse_sculpt_verts.clear();
+    g_wm_ios_muse_sculpt_dragging = false;
+    /* Brush tools apply in Sculpt; skip tool_set while in Vertex Paint. */
+    Object *ob_brush = CTX_data_active_object(C);
+    if (ob_brush != nullptr && (ob_brush->mode & OB_MODE_SCULPT) != 0) {
+      wmOperatorType *ot = WM_operatortype_find("WM_OT_tool_set_by_id", true);
+      if (ot != nullptr) {
+        PointerRNA props_ptr;
+        WM_operator_properties_create_ptr(&props_ptr, ot);
+        RNA_string_set(&props_ptr, "name", brush_tool_id);
+        WM_operator_name_call_ptr(
+            C, ot, blender::wm::OpCallContext::ExecDefault, &props_ptr, nullptr);
+        WM_operator_properties_free(&props_ptr);
+      }
+      if (Scene *scene = CTX_data_scene(C)) {
+        if (Paint *paint = BKE_paint_get_active_from_paintmode(scene, PaintMode::Sculpt)) {
+          if (Brush *brush = BKE_paint_brush(paint)) {
+            if (brush_kind == WMIOS_MUSE_BRUSH_INFLATE_SUB) {
+              brush->flag |= BRUSH_DIR_IN;
+            }
+            else if (brush_kind == WMIOS_MUSE_BRUSH_INFLATE_ADD) {
+              brush->flag &= ~BRUSH_DIR_IN;
+            }
+            BKE_brush_tag_unsaved_changes(brush);
+          }
+        }
+      }
+    }
+  }
+
+  Scene *scene = CTX_data_scene(C);
+  if (scene != nullptr) {
+    Object *ob_paint = CTX_data_active_object(C);
+    const PaintMode paint_mode = (ob_paint && (ob_paint->mode & OB_MODE_VERTEX_PAINT)) ?
+                                     PaintMode::Vertex :
+                                     PaintMode::Sculpt;
+    if (Paint *paint = BKE_paint_get_active_from_paintmode(scene, paint_mode)) {
+      if (Brush *brush = BKE_paint_brush(paint)) {
+        if (pending_strength) {
+          BKE_brush_alpha_set(paint, brush, strength);
+        }
+        if (pending_radius) {
+          BKE_brush_unprojected_size_set(paint, brush, radius * 2.0f);
+        }
+      }
+    }
+  }
+
+  CTX_wm_area_set(C, area_prev);
+  CTX_wm_region_set(C, region_prev);
+
+  wm_ios_immersive_publish_hand_menu_state(C, CTX_data_active_object(C));
+}
+
+/**
+ * Sculpt Mode: continuous soft deform along the Muse tip.
+ * Brush kind (hand menu): Draw/Clay = tip follow, Grab = locked cluster,
+ * Smooth = relax toward local average. Pressure × Strength every frame.
+ */
+static void wm_ios_immersive_muse_sculpt_grab(bContext *C,
+                                              Object *ob,
+                                              const float muse_world[3],
+                                              const bool tip_down,
+                                              const float pressure)
+{
+  if (ob == nullptr || ob->type != OB_MESH || (ob->mode & OB_MODE_SCULPT) == 0) {
+    if (g_wm_ios_muse_sculpt_dragging) {
+      g_wm_ios_muse_sculpt_dragging = false;
+      g_wm_ios_muse_sculpt_verts.clear();
+      g_wm_ios_muse_stroke_active = false;
+    }
+    return;
+  }
+
+  Mesh *mesh = static_cast<Mesh *>(ob->data);
+  if (mesh == nullptr || mesh->verts_num <= 0) {
+    return;
+  }
+
+  float muse_local[3];
+  mul_v3_m4v3(muse_local, ob->world_to_object().ptr(), muse_world);
+
+  if (!tip_down) {
+    if (g_wm_ios_muse_sculpt_dragging) {
+      g_wm_ios_muse_sculpt_dragging = false;
+      g_wm_ios_muse_stroke_active = false;
+      g_wm_ios_muse_sculpt_verts.clear();
+      BKE_sculptsession_free_pbvh(*ob);
+      mesh->tag_positions_changed();
+      DEG_id_tag_update(&mesh->id, ID_RECALC_GEOMETRY);
+      WM_event_add_notifier(C, NC_OBJECT | ND_DRAW, ob);
+      ED_undo_push(C, "Muse Sculpt");
+    }
+    return;
+  }
+
+  float radius = 0.25f;
+  float brush_strength = 1.0f;
+  if (Scene *scene = CTX_data_scene(C)) {
+    if (Paint *paint = BKE_paint_get_active_from_paintmode(scene, PaintMode::Sculpt)) {
+      if (Brush *brush = BKE_paint_brush(paint)) {
+        const float unprojected = BKE_brush_unprojected_radius_get(paint, brush);
+        if (unprojected > 1.0e-4f) {
+          radius = unprojected;
+        }
+        brush_strength = BKE_brush_alpha_get(paint, brush);
+      }
+    }
+  }
+
+  const float tip_force = std::clamp(pressure, 0.0f, 1.0f);
+  const float strength = std::max(tip_force, 0.05f) * std::max(brush_strength, 0.01f);
+  blender::MutableSpan<blender::float3> positions = mesh->vert_positions_for_write();
+  const float radius_sq = radius * radius;
+
+  if (!g_wm_ios_muse_sculpt_dragging) {
+    copy_v3_v3(g_wm_ios_muse_sculpt_last_local, muse_local);
+    g_wm_ios_muse_sculpt_dragging = true;
+    g_wm_ios_muse_stroke_active = true;
+    /* Drop any leftover PBVH from a prior Vertex Paint / Sculpt session so
+     * tip-driven writes to Mesh positions actually stick and export. */
+    if (ob->sculpt != nullptr) {
+      BKE_sculptsession_free_pbvh(*ob);
+    }
+    if (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_GRAB) {
+      g_wm_ios_muse_sculpt_verts.clear();
+      g_wm_ios_muse_sculpt_verts.reserve(256);
+      for (int i = 0; i < int(positions.size()); i++) {
+        const float dist_sq = len_squared_v3v3(&positions[i].x, muse_local);
+        if (dist_sq > radius_sq) {
+          continue;
+        }
+        const float t = 1.0f - (sqrtf(dist_sq) / radius);
+        const float w = t * t * (3.0f - 2.0f * t) * strength;
+        g_wm_ios_muse_sculpt_verts.push_back({i, w});
+      }
+      if (g_wm_ios_muse_sculpt_verts.empty()) {
+        g_wm_ios_muse_sculpt_dragging = false;
+        g_wm_ios_muse_stroke_active = false;
+      }
+    }
+    return;
+  }
+
+  float delta[3];
+  sub_v3_v3v3(delta, muse_local, g_wm_ios_muse_sculpt_last_local);
+  copy_v3_v3(g_wm_ios_muse_sculpt_last_local, muse_local);
+
+  bool any = false;
+  if (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_GRAB) {
+    if (len_squared_v3(delta) < 1e-12f) {
+      return;
+    }
+    for (const WMIOSMuseSculptVert &entry : g_wm_ios_muse_sculpt_verts) {
+      madd_v3_v3fl(&positions[entry.index].x, delta, entry.weight);
+      any = true;
+    }
+  }
+  else if (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_SMOOTH) {
+    std::vector<int> indices;
+    indices.reserve(128);
+    float centroid[3] = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < int(positions.size()); i++) {
+      if (len_squared_v3v3(&positions[i].x, muse_local) > radius_sq) {
+        continue;
+      }
+      indices.push_back(i);
+      add_v3_v3(centroid, &positions[i].x);
+    }
+    if (indices.empty()) {
+      return;
+    }
+    mul_v3_fl(centroid, 1.0f / float(indices.size()));
+    const float blend = 0.35f * strength;
+    for (const int i : indices) {
+      float *co = &positions[i].x;
+      co[0] += (centroid[0] - co[0]) * blend;
+      co[1] += (centroid[1] - co[1]) * blend;
+      co[2] += (centroid[2] - co[2]) * blend;
+      any = true;
+    }
+  }
+  else if (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_INFLATE_ADD ||
+           g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_INFLATE_SUB)
+  {
+    /* Inflate/Deflate along vertex normals (independent of tip motion). */
+    const float dir = (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_INFLATE_SUB) ? -1.0f : 1.0f;
+    const float amount = strength * radius * 0.06f * dir;
+    const blender::Span<blender::float3> normals = mesh->vert_normals();
+    for (int i = 0; i < int(positions.size()); i++) {
+      const float dist_sq = len_squared_v3v3(&positions[i].x, muse_local);
+      if (dist_sq > radius_sq) {
+        continue;
+      }
+      const float t = 1.0f - (sqrtf(dist_sq) / radius);
+      const float w = t * t * (3.0f - 2.0f * t) * amount;
+      madd_v3_v3fl(&positions[i].x, &normals[i].x, w);
+      any = true;
+    }
+  }
+  else {
+    /* Draw / Clay: continuous tip-follow displace with falloff. */
+    if (len_squared_v3(delta) < 1e-12f) {
+      return;
+    }
+    const float clay_scale = (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_CLAY) ? 1.25f : 1.0f;
+    for (int i = 0; i < int(positions.size()); i++) {
+      const float dist_sq = len_squared_v3v3(&positions[i].x, muse_local);
+      if (dist_sq > radius_sq) {
+        continue;
+      }
+      const float t = 1.0f - (sqrtf(dist_sq) / radius);
+      const float w = t * t * (3.0f - 2.0f * t) * strength * clay_scale;
+      madd_v3_v3fl(&positions[i].x, delta, w);
+      any = true;
+    }
+  }
+  if (!any) {
+    return;
+  }
+
+  mesh->tag_positions_changed();
+  DEG_id_tag_update(&mesh->id, ID_RECALC_GEOMETRY);
+  WM_event_add_notifier(C, NC_GEOM | ND_DATA, mesh);
+}
+
+/**
+ * Edit Mode: move selected vertices by Muse tip delta in object space.
+ * If nothing is selected, pick the nearest vertex on tip-down.
+ */
+static void wm_ios_immersive_muse_edit_verts(bContext *C,
+                                             Object *ob,
+                                             const float muse_world[3],
+                                             const bool tip_down)
+{
+  if (ob == nullptr || ob->type != OB_MESH || (ob->mode & OB_MODE_EDIT) == 0) {
+    if (g_wm_ios_muse_edit_dragging) {
+      g_wm_ios_muse_edit_dragging = false;
+      g_wm_ios_muse_stroke_active = false;
+    }
+    return;
+  }
+
+  BMEditMesh *em = BKE_editmesh_from_object(ob);
+  if (em == nullptr || em->bm == nullptr) {
+    if (g_wm_ios_muse_edit_dragging) {
+      g_wm_ios_muse_edit_dragging = false;
+      g_wm_ios_muse_stroke_active = false;
+    }
+    return;
+  }
+
+  float muse_local[3];
+  mul_v3_m4v3(muse_local, ob->world_to_object().ptr(), muse_world);
+
+  if (!tip_down) {
+    if (g_wm_ios_muse_edit_dragging) {
+      g_wm_ios_muse_edit_dragging = false;
+      g_wm_ios_muse_stroke_active = false;
+      ED_undo_push(C, "Muse Vertex Move");
+    }
+    return;
+  }
+
+  BMesh *bm = em->bm;
+  if (!g_wm_ios_muse_edit_dragging) {
+    /* Prefer existing selection; otherwise grab nearest vert to the tip. */
+    int selected = 0;
+    BMVert *v;
+    BMIter iter;
+    BM_ITER_MESH (v, &iter, bm, BM_VERTS_OF_MESH) {
+      if (!BM_elem_flag_test(v, BM_ELEM_HIDDEN) && BM_elem_flag_test(v, BM_ELEM_SELECT)) {
+        selected++;
+      }
+    }
+    if (selected == 0) {
+      BMVert *nearest = nullptr;
+      float best_dist_sq = FLT_MAX;
+      BM_ITER_MESH (v, &iter, bm, BM_VERTS_OF_MESH) {
+        if (BM_elem_flag_test(v, BM_ELEM_HIDDEN)) {
+          continue;
+        }
+        const float dist_sq = len_squared_v3v3(v->co, muse_local);
+        if (dist_sq < best_dist_sq) {
+          best_dist_sq = dist_sq;
+          nearest = v;
+        }
+      }
+      if (nearest == nullptr) {
+        return;
+      }
+      BM_ITER_MESH (v, &iter, bm, BM_VERTS_OF_MESH) {
+        BM_elem_flag_disable(v, BM_ELEM_SELECT);
+      }
+      BM_elem_flag_enable(nearest, BM_ELEM_SELECT);
+      bm->selectmode = SCE_SELECT_VERTEX;
+      EDBM_selectmode_flush(em);
+    }
+
+    copy_v3_v3(g_wm_ios_muse_edit_last_local, muse_local);
+    g_wm_ios_muse_edit_dragging = true;
+    g_wm_ios_muse_stroke_active = true;
+    return;
+  }
+
+  float delta[3];
+  sub_v3_v3v3(delta, muse_local, g_wm_ios_muse_edit_last_local);
+  if (len_squared_v3(delta) < 1e-12f) {
+    return;
+  }
+  copy_v3_v3(g_wm_ios_muse_edit_last_local, muse_local);
+
+  BMVert *v;
+  BMIter iter;
+  BM_ITER_MESH (v, &iter, bm, BM_VERTS_OF_MESH) {
+    if (BM_elem_flag_test(v, BM_ELEM_SELECT) && !BM_elem_flag_test(v, BM_ELEM_HIDDEN)) {
+      add_v3_v3(v->co, delta);
+    }
+  }
+
+  Mesh *mesh = static_cast<Mesh *>(ob->data);
+  const EDBMUpdate_Params update_params = {
+      .calc_looptris = true,
+      .calc_normals = true,
+      .is_destructive = false,
+  };
+  EDBM_update(mesh, &update_params);
+  DEG_id_tag_update(&mesh->id, ID_RECALC_GEOMETRY);
+  WM_event_add_notifier(C, NC_GEOM | ND_DATA, mesh);
+}
+
+/**
+ * Vertex Paint: blend brush color onto Point-domain Color attribute near Muse tip.
+ */
+static void wm_ios_immersive_muse_vertex_paint(bContext *C,
+                                               Object *ob,
+                                               const float muse_world[3],
+                                               const bool tip_down,
+                                               const float pressure)
+{
+  using namespace blender;
+
+  if (ob == nullptr || ob->type != OB_MESH || (ob->mode & OB_MODE_VERTEX_PAINT) == 0) {
+    if (g_wm_ios_muse_vpaint_dragging) {
+      g_wm_ios_muse_vpaint_dragging = false;
+      g_wm_ios_muse_stroke_active = false;
+    }
+    return;
+  }
+
+  Mesh *mesh = static_cast<Mesh *>(ob->data);
+  if (mesh == nullptr || mesh->verts_num <= 0) {
+    return;
+  }
+
+  if (!tip_down) {
+    if (g_wm_ios_muse_vpaint_dragging) {
+      g_wm_ios_muse_vpaint_dragging = false;
+      g_wm_ios_muse_stroke_active = false;
+      DEG_id_tag_update(&mesh->id, ID_RECALC_GEOMETRY);
+      WM_event_add_notifier(C, NC_OBJECT | ND_DRAW, ob);
+      ED_undo_push(C, "Muse Vertex Paint");
+    }
+    return;
+  }
+
+  float radius = 0.25f;
+  float brush_strength = 1.0f;
+  float paint_rgb[3] = {1.0f, 0.2f, 0.1f};
+  if (Scene *scene = CTX_data_scene(C)) {
+    if (Paint *paint = BKE_paint_get_active_from_paintmode(scene, PaintMode::Vertex)) {
+      if (Brush *brush = BKE_paint_brush(paint)) {
+        const float unprojected = BKE_brush_unprojected_radius_get(paint, brush);
+        if (unprojected > 1.0e-4f) {
+          radius = unprojected;
+        }
+        brush_strength = BKE_brush_alpha_get(paint, brush);
+        if (const float *col = BKE_brush_color_get(paint, brush)) {
+          copy_v3_v3(paint_rgb, col);
+        }
+      }
+    }
+  }
+
+  bke::MutableAttributeAccessor attributes = mesh->attributes_for_write();
+  /* Prefer a Point-domain float Color attribute for Muse painting. */
+  bool need_create = true;
+  if (mesh->active_color_attribute != nullptr && mesh->active_color_attribute[0] != '\0') {
+    if (std::optional<bke::AttributeMetaData> meta = attributes.lookup_meta_data(
+            mesh->active_color_attribute))
+    {
+      if (meta->domain == bke::AttrDomain::Point && meta->data_type == bke::AttrType::ColorFloat)
+      {
+        need_create = false;
+      }
+    }
+  }
+  if (need_create) {
+    if (attributes.contains("Color")) {
+      if (std::optional<bke::AttributeMetaData> meta = attributes.lookup_meta_data("Color")) {
+        if (meta->domain != bke::AttrDomain::Point || meta->data_type != bke::AttrType::ColorFloat)
+        {
+          attributes.remove("Color");
+        }
+      }
+    }
+    if (!attributes.contains("Color")) {
+      attributes.add<ColorGeometry4f>(
+          "Color", bke::AttrDomain::Point, bke::AttributeInitDefaultValue());
+    }
+    BKE_id_attributes_active_color_set(&mesh->id, "Color");
+  }
+
+  const StringRef color_name = BKE_id_attributes_active_color_name(&mesh->id).value_or("Color");
+  bke::SpanAttributeWriter<ColorGeometry4f> colors =
+      attributes.lookup_or_add_for_write_span<ColorGeometry4f>(color_name, bke::AttrDomain::Point);
+  if (!colors) {
+    return;
+  }
+
+  const float tip_force = std::clamp(pressure, 0.0f, 1.0f);
+  const float strength = std::max(tip_force, 0.05f) * std::max(brush_strength, 0.01f);
+  float muse_local[3];
+  mul_v3_m4v3(muse_local, ob->world_to_object().ptr(), muse_world);
+  const float radius_sq = radius * radius;
+  const Span<float3> positions = mesh->vert_positions();
+  const ColorGeometry4f target = g_wm_ios_muse_vpaint_erase ?
+                                     ColorGeometry4f(1.0f, 1.0f, 1.0f, 1.0f) :
+                                     ColorGeometry4f(paint_rgb[0], paint_rgb[1], paint_rgb[2], 1.0f);
+
+  bool any = false;
+  for (const int i : positions.index_range()) {
+    const float dist_sq = len_squared_v3v3(&positions[i].x, muse_local);
+    if (dist_sq > radius_sq) {
+      continue;
+    }
+    const float t = 1.0f - (sqrtf(dist_sq) / radius);
+    const float fac = t * t * (3.0f - 2.0f * t) * strength;
+    colors.span[i] = bke::attribute_math::mix2(fac, colors.span[i], target);
+    any = true;
+  }
+  colors.finish();
+
+  if (!any) {
+    return;
+  }
+
+  if (!g_wm_ios_muse_vpaint_dragging) {
+    g_wm_ios_muse_vpaint_dragging = true;
+    g_wm_ios_muse_stroke_active = true;
+  }
+
+  DEG_id_tag_update(&mesh->id, ID_RECALC_GEOMETRY);
+  WM_event_add_notifier(C, NC_OBJECT | ND_DRAW, ob);
+}
+
+/**
+ * Project Muse Blender-space position into the active View3D and inject
+ * GHOST tablet cursor/button events so SCULPT_OT_brush_stroke can run.
+ * In Edit Mode, move selected vertices by Muse tip delta instead.
+ */
+static void wm_ios_immersive_consume_muse(bContext *C, Object *ob)
+{
+  float sample_x = 0.0f;
+  float sample_y = 0.0f;
+  float sample_z = 0.0f;
+  float pressure = 0.0f;
+  int tip_pressed = 0;
+  bool has_sample = false;
+  {
+    std::lock_guard lock(g_wm_ios_immersive_muse_sample.mutex);
+    if (g_wm_ios_immersive_muse_sample.pending) {
+      sample_x = g_wm_ios_immersive_muse_sample.x;
+      sample_y = g_wm_ios_immersive_muse_sample.y;
+      sample_z = g_wm_ios_immersive_muse_sample.z;
+      pressure = g_wm_ios_immersive_muse_sample.pressure;
+      tip_pressed = g_wm_ios_immersive_muse_sample.tip_pressed;
+      g_wm_ios_immersive_muse_sample.pending = false;
+      has_sample = true;
+    }
+  }
+  if (!has_sample) {
+    return;
+  }
+
+  const bool tip_down = tip_pressed != 0;
+  if (g_wm_ios_muse_tip_down && !tip_down) {
+    g_wm_ios_muse_tip_just_released = true;
+  }
+  g_wm_ios_muse_tip_down = tip_down;
+
+  wmWindow *win = CTX_wm_window(C);
+  if (win == nullptr) {
+    return;
+  }
+
+  const bool sculpt_mode = (ob != nullptr) && (ob->mode & OB_MODE_SCULPT);
+  const bool edit_mode = (ob != nullptr) && (ob->mode & OB_MODE_EDIT) && (ob->type == OB_MESH);
+  const bool vpaint_mode = (ob != nullptr) && (ob->mode & OB_MODE_VERTEX_PAINT) &&
+                           (ob->type == OB_MESH);
+  const int mode_now = vpaint_mode ? 3 : (sculpt_mode ? 2 : (edit_mode ? 1 : 0));
+  if (mode_now != g_wm_ios_muse_last_mode) {
+    /* Mode switch mid-stroke races USD reload and leaves broken drag state. */
+    wm_ios_immersive_muse_cancel_interaction();
+    g_wm_ios_muse_last_mode = mode_now;
+  }
+
+  if (!sculpt_mode && !edit_mode && !vpaint_mode) {
+    if (g_wm_ios_muse_stroke_active) {
+      wm_ios_immersive_muse_end_stroke(0, 0, 0.0f);
+    }
+    wm_ios_immersive_muse_cancel_interaction();
+    return;
+  }
+
+  ScrArea *area = wm_ios_immersive_find_view3d_area(C);
+  ARegion *region = wm_ios_immersive_find_view3d_window_region(area);
+  if (region == nullptr) {
+    if (g_wm_ios_muse_stroke_active) {
+      wm_ios_immersive_muse_end_stroke(0, 0, 0.0f);
+    }
+    wm_ios_immersive_muse_cancel_interaction();
+    return;
+  }
+
+  const float co[3] = {sample_x, sample_y, sample_z};
+
+  /* Exclusive: never run edit/sculpt/vpaint grabs in the same frame. */
+  if (edit_mode) {
+    g_wm_ios_muse_sculpt_dragging = false;
+    g_wm_ios_muse_vpaint_dragging = false;
+    wm_ios_immersive_muse_edit_verts(C, ob, co, tip_down);
+  }
+  else if (sculpt_mode) {
+    g_wm_ios_muse_edit_dragging = false;
+    g_wm_ios_muse_vpaint_dragging = false;
+    wm_ios_immersive_muse_sculpt_grab(C, ob, co, tip_down, pressure);
+  }
+  else if (vpaint_mode) {
+    g_wm_ios_muse_edit_dragging = false;
+    g_wm_ios_muse_sculpt_dragging = false;
+    wm_ios_immersive_muse_vertex_paint(C, ob, co, tip_down, pressure);
+  }
+
+  /* Do not require CLIP_WIN/BB: Immersive Muse points often project outside the
+   * 2D View3D. #ED_view3d_project_float_global only writes r_co on OK, so a
+   * strict clip left mval uninitialized and blocked all injection. */
+  float mval[2] = {0.0f, 0.0f};
+  const eV3DProjStatus proj = ED_view3d_project_float_global(
+      region, co, mval, V3D_PROJ_TEST_NOP);
+  const bool proj_ok = (proj == V3D_PROJ_RET_OK);
+  const bool on_screen = proj_ok && (mval[0] >= 0.0f) && (mval[0] < float(region->winx)) &&
+                         (mval[1] >= 0.0f) && (mval[1] < float(region->winy));
+
+  int xy[2] = {
+      region->winrct.xmin + int(mval[0]),
+      region->winrct.ymin + int(mval[1]),
+  };
+  /* Clamp into the region so strokes can continue near the edges. */
+  xy[0] = std::clamp(xy[0], region->winrct.xmin, region->winrct.xmax - 1);
+  xy[1] = std::clamp(xy[1], region->winrct.ymin, region->winrct.ymax - 1);
+  wm_cursor_position_to_ghost_screen_coords(win, &xy[0], &xy[1]);
+
+  const float tablet_pressure = tip_down ? std::max(pressure, 0.05f) : 0.0f;
+
+  {
+    static double last_log_time = 0.0;
+    const double now = BLI_time_now_seconds();
+    if (now - last_log_time >= 1.0) {
+      last_log_time = now;
+      char buf[288];
+      SNPRINTF(buf,
+               "[immersive] muse inject tip=%d p=%.2f blender=(%.3f,%.3f,%.3f) "
+               "mval=(%.1f,%.1f) ghost=(%d,%d) proj=%d on_screen=%d stroke=%d "
+               "mode=%s",
+               int(tip_down),
+               tablet_pressure,
+               sample_x,
+               sample_y,
+               sample_z,
+               mval[0],
+               mval[1],
+               xy[0],
+               xy[1],
+               int(proj),
+               int(on_screen),
+               int(g_wm_ios_muse_stroke_active),
+               vpaint_mode ? "vpaint" :
+                   (sculpt_mode ? "sculpt3d" : (edit_mode ? "edit" : "other")));
+      GHOST_IOS_diag_log(buf);
+      fprintf(stderr, "%s\n", buf);
+      fflush(stderr);
+    }
+  }
+
+  /* Hover cursor feedback in the 2D View3D only (no tablet LMB for sculpt —
+   * deformation is applied in 3D above). */
+  if (proj_ok) {
+    GHOST_IOS_push_tablet_cursor(xy[0], xy[1], tablet_pressure);
+  }
 }
 
 static bool wm_ios_immersive_export_scene(bContext *C,
@@ -4260,6 +5254,10 @@ static bool wm_ios_immersive_export_scene(bContext *C,
   RNA_boolean_set(&props_ptr, "generate_preview_surface", true);
   /* Preserve physical dimensions: USD is authored with one unit per meter. */
   RNA_float_set(&props_ptr, "meters_per_unit", 1.0f);
+  /* Match Muse/RealityKit Y-up conversion used by BlenderImmersiveMusePen.
+   * IO_AXIS_Y == 1 (see IO_orientation.hh). */
+  RNA_boolean_set(&props_ptr, "convert_orientation", true);
+  RNA_enum_set(&props_ptr, "export_global_up_selection", 1 /* IO_AXIS_Y */);
   /* Viewport evaluation: the render depsgraph reads the original mesh datablock,
    * which does not include live edit-mode changes until leaving edit mode. */
   RNA_enum_set(&props_ptr, "evaluation_mode", DAG_EVAL_VIEWPORT);
@@ -4278,6 +5276,9 @@ static bool wm_ios_immersive_export_scene(bContext *C,
 
 static void wm_ios_immersive_sync_impl(bContext *C)
 {
+  /* Hand-menu commands from Swift (mode / brush / strength / radius / dismiss). */
+  wm_ios_immersive_apply_hand_menu(C);
+
   Object *ob = CTX_data_active_object(C);
 
   /* Heartbeat so the on-device log shows what the sync loop can see. */
@@ -4295,6 +5296,7 @@ static void wm_ios_immersive_sync_impl(bContext *C)
   }
 
   if (ob == nullptr) {
+    wm_ios_immersive_consume_muse(C, nullptr);
     return;
   }
 
@@ -4327,11 +5329,14 @@ static void wm_ios_immersive_sync_impl(bContext *C)
         object_name, ob->loc[0], ob->loc[1], ob->loc[2]);
   }
 
-  /* Edit-mode topology/vertex changes cannot be represented by transform
-   * updates. Re-export the USDZ after a short debounce and ask RealityKit to
-   * reload it. This is intentionally limited to edit mode; object transforms
-   * continue to use the fast path above. */
-  if (ob->mode & OB_MODE_EDIT) {
+  wm_ios_immersive_consume_muse(C, ob);
+
+  /* Edit/sculpt mesh changes cannot be represented by transform updates.
+   * Re-export the USDZ after a short debounce and ask RealityKit to reload.
+   * While a Muse tip stroke is active, skip export; reload soon after release. */
+  const bool mesh_edit_mode =
+      (ob->mode & (OB_MODE_EDIT | OB_MODE_SCULPT | OB_MODE_VERTEX_PAINT)) != 0;
+  if (mesh_edit_mode) {
     Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C);
     static uint64_t last_update_count = 0;
     static uint64_t pending_update_count = 0;
@@ -4343,30 +5348,57 @@ static void wm_ios_immersive_sync_impl(bContext *C)
     }
 
     const double now = BLI_time_now_seconds();
+    const bool tip_just_released = g_wm_ios_muse_tip_just_released;
+    if (tip_just_released) {
+      g_wm_ios_muse_tip_just_released = false;
+      /* Force a pending export even if depsgraph count did not change yet. */
+      if (pending_update_count == 0) {
+        pending_update_count = 1;
+      }
+    }
 
     /* Heartbeat so the on-device log shows this branch is reached. */
     static double last_log_time = 0.0;
     if (now - last_log_time >= 2.0) {
       last_log_time = now;
       fprintf(stderr,
-              "[immersive] edit sync alive: depsgraph=%d update_count=%llu pending=%llu\n",
+              "[immersive] mesh sync alive: mode=%d depsgraph=%d update_count=%llu "
+              "pending=%llu tip_down=%d\n",
+              ob->mode,
               depsgraph != nullptr,
               (unsigned long long)update_count,
-              (unsigned long long)pending_update_count);
+              (unsigned long long)pending_update_count,
+              g_wm_ios_muse_tip_down);
       fflush(stderr);
     }
-    if (pending_update_count != 0 && (now - last_export_time) >= 0.25) {
+
+    const bool interaction_active = wm_ios_immersive_muse_interaction_active();
+    /* Live Immersive preview while stroking (~8–10 Hz). Flicker-free USD swap
+     * makes mid-stroke reloads safe; tip-up still forces a final refresh. */
+    const double debounce = tip_just_released ? 0.10 :
+                            (g_wm_ios_muse_tip_down || interaction_active) ? 0.12 :
+                                                                            0.50;
+    const bool allow_export = true;
+    if (allow_export && pending_update_count != 0 && (now - last_export_time) >= debounce) {
       static uint64_t refresh_serial = 0;
       char filename[64];
       SNPRINTF(filename, "immersive_preview_%llu.usdz", (unsigned long long)++refresh_serial);
       char usdz_path[FILE_MAX];
       BLI_path_join(usdz_path, sizeof(usdz_path), BKE_tempdir_session(), filename);
+      /* Flush BMesh → Mesh so edit-mode verts appear in the USD export. */
+      if ((ob->mode & OB_MODE_EDIT) && ob->type == OB_MESH) {
+        if (Main *bmain = CTX_data_main(C)) {
+          if (BKE_editmesh_from_object(ob) != nullptr) {
+            EDBM_mesh_load_ex(bmain, ob, false);
+          }
+        }
+      }
       if (wm_ios_immersive_export_scene(C, usdz_path, false)) {
         GHOST_IOS_immersive_reload_model(usdz_path);
         last_export_time = now;
         last_update_count = depsgraph ? DEG_get_update_count(depsgraph) : last_update_count;
         pending_update_count = 0;
-        fprintf(stderr, "[immersive] geometry refreshed\n");
+        fprintf(stderr, "[immersive] geometry refreshed (sculpt/edit)\n");
         fflush(stderr);
       }
     }

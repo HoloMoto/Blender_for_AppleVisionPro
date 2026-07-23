@@ -107,6 +107,45 @@ extern bool GHOST_IOS_documents_export_filepath(const char *filename,
 /** Show a native alert (visible without log access). */
 extern void GHOST_IOS_show_native_alert(const char *title, const char *message);
 /**
+ * Pump the main CFRunLoop briefly so visionOS/iOS compositor and watchdog stay
+ * healthy while Blender's long synchronous startup runs on the main thread.
+ * Safe no-op when not on the main thread.
+ */
+extern void GHOST_IOS_pump_main_runloop(void);
+/**
+ * Stronger yield: schedule a no-op on the main queue and spin the runloop until
+ * it runs. Resets the launch watchdog better than a zero-timeout pump.
+ */
+extern void GHOST_IOS_yield_main_runloop(void);
+/**
+ * Schedule work on the next main-queue turn and return immediately.
+ * Nested CFRunLoop spins do NOT reset the launch watchdog; this does.
+ */
+extern void GHOST_IOS_schedule_on_main(void (*fn)(void *userdata), void *userdata);
+/**
+ * Like #GHOST_IOS_schedule_on_main but after \a delay_seconds.
+ * Plain dispatch_async chains drain back-to-back on main and do NOT reset the
+ * launch watchdog — a real delay lets UIKit/SwiftUI paint a frame.
+ */
+extern void GHOST_IOS_schedule_on_main_after(void (*fn)(void *userdata),
+                                             void *userdata,
+                                             double delay_seconds);
+/** Call once WM is up so window reactivation is safe. */
+extern void GHOST_IOS_notify_launch_ui_ready(void);
+/**
+ * Run \a fn on a background queue while spinning the main runloop until done.
+ * Use for long CPU-only startup steps (e.g. RNA_init) that would otherwise
+ * trip the visionOS launch watchdog.
+ */
+typedef void (*GHOST_IOSWorkFn)(void *userdata);
+extern void GHOST_IOS_run_work_yielding(GHOST_IOSWorkFn fn, void *userdata);
+/** Append a line to Documents/startup.log (visible in Files app). */
+extern void GHOST_IOS_diag_log(const char *message);
+/** Install signal/exception handlers writing Documents/ios_crash.log. */
+extern void GHOST_IOS_diag_install_handlers(void);
+/** Write Documents/README-logs.txt explaining log files. */
+extern void GHOST_IOS_diag_write_readme(void);
+/**
  * Enter or leave Vision Pro Immersive Space (RealityKit).
  * \param usdz_path: USDZ exported from the current Blender scene (when enabling).
  */
@@ -120,6 +159,19 @@ extern void GHOST_IOS_immersive_reload_model(const char *usdz_path);
 /** Push the active Blender object's transform state to the RealityKit view. */
 extern void GHOST_IOS_immersive_update_active_object(
     const char *object_name, float blender_x, float blender_y, float blender_z);
+/** Push hand-menu state (mode/strength/radius/brush) to the Immersive UI. */
+extern void GHOST_IOS_immersive_update_hand_menu(int mode,
+                                                 float strength,
+                                                 float radius,
+                                                 const char *brush_label,
+                                                 int brush_kind);
+/**
+ * Inject a tablet-aware cursor move into the active GHOST iOS window.
+ * Coordinates are Ghost screen/client space (UIKit Y-down, before WM flip).
+ */
+extern void GHOST_IOS_push_tablet_cursor(int x, int y, float pressure);
+/** Inject left-button down/up with stylus tablet pressure. */
+extern void GHOST_IOS_push_tablet_button(bool is_down, float pressure);
 
 #endif
 

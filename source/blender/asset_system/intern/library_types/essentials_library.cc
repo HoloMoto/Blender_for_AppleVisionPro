@@ -7,6 +7,11 @@
  */
 
 #include "BKE_appdir.hh"
+#include "BKE_blender_version.h"
+
+#include "BLI_fileops.h"
+#include "BLI_path_utils.hh"
+#include "BLI_string.h"
 
 #include "utils.hh"
 
@@ -33,11 +38,35 @@ std::optional<AssetLibraryReference> EssentialsAssetLibrary::library_reference()
 
 StringRefNull essentials_directory_path()
 {
-  static std::string path = []() {
-    const std::optional<std::string> datafiles_path = BKE_appdir_folder_id(
-        BLENDER_SYSTEM_DATAFILES, "assets");
-    return datafiles_path.value_or("");
-  }();
+  /* Do not permanently cache an empty result: on Apple cross-platform the first
+   * call can race before BLENDER_SYSTEM_DATAFILES is set / appdir is ready. */
+  static std::string path;
+  if (!path.empty()) {
+    return path;
+  }
+
+  if (const std::optional<std::string> datafiles_path = BKE_appdir_folder_id(
+          BLENDER_SYSTEM_DATAFILES, "assets"))
+  {
+    path = *datafiles_path;
+    return path;
+  }
+
+#if defined(WITH_APPLE_CROSSPLATFORM)
+  /* Explicit fallback: Blender.app/Assets/<ver>/datafiles/assets */
+  const char *program_dir = BKE_appdir_program_dir();
+  if (program_dir != nullptr && program_dir[0] != '\0') {
+    char candidate[FILE_MAX];
+    char ver[16];
+    SNPRINTF(ver, "%d.%d", BLENDER_VERSION / 100, BLENDER_VERSION % 100);
+    BLI_path_join(candidate, sizeof(candidate), program_dir, "Assets", ver, "datafiles", "assets");
+    if (BLI_is_dir(candidate)) {
+      path = candidate;
+      return path;
+    }
+  }
+#endif
+
   return path;
 }
 

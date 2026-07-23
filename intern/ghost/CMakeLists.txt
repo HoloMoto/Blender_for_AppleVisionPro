@@ -189,6 +189,8 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
         intern/GHOST_SystemIOS.mm
         intern/GHOST_WindowIOS.mm
         intern/GHOST_IOSImmersive.mm
+        intern/ios_diagnostic_log.mm
+        intern/ios_premain_log.c
         intern/immersive/GHOST_VisionImmersiveBridge.h
         intern/immersive/GHOST_VisionImmersiveBridge.mm
 
@@ -207,7 +209,10 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
         list(APPEND SRC
           intern/immersive/BlenderImmersiveState.swift
           intern/immersive/BlenderImmersiveBridge.swift
+          intern/immersive/BlenderImmersiveMusePen.swift
+          intern/immersive/BlenderImmersiveHandMenu.swift
           intern/immersive/BlenderImmersiveSpaceView.swift
+          intern/immersive/BlenderIOSDiagnosticLog.swift
           intern/immersive/BlenderVisionApp.swift
         )
         set(CMAKE_XCODE_ATTRIBUTE_SWIFT_VERSION "5.0")

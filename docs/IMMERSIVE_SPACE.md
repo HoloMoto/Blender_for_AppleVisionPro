@@ -44,3 +44,31 @@ Linking iOS dylibs into a visionOS app fails (`built for 'iOS'`). Always use `li
 2. Wire Blender init into the visionOS Swift `@main` path
 3. ~~Dedicated `lib/visionos_arm64` when needed~~ — `make deps visionos` wired; run the build
 4. Live scene refresh while Immersive Space stays open
+
+## Muse Pen roadmap (Logitech Muse)
+
+Ultimate goal: **sculpt in Immersive Space** with bidirectional sync
+(Immersive edits update the 2D Blender window, and vice versa).
+
+| Phase | Goal | Status |
+|-------|------|--------|
+| **1** | Muse as Immersive cursor (tip anchor + visual) | Done |
+| **2** | Muse tip → 2D View3D sculpt (tablet projection MVP) | Done (MVP) |
+| **3** | Immersive-native mesh hit / dab (no 2D projection) | Planned |
+
+### Phase 2 MVP (current)
+
+Immersive Muse tip/pressure is sampled in Swift, queued via
+`WM_IOS_immersive_muse_sample`, projected into the active View3D with
+`ED_view3d_project_float_global`, then injected as GHOST stylus tablet
+cursor/button events so the existing `SCULPT_OT_brush_stroke` path runs.
+Immersive mesh appearance updates through the same debounce USD reload used
+for edit mode (extended to sculpt; reload prefers tip-up).
+
+**How to try:** put the active object in Sculpt Mode, open Immersive Space
+(Travel Mode off), press and drag the Muse tip. Brush dabs appear in the 2D
+View3D; after releasing the tip, Immersive USD refreshes shortly after.
+
+Phase 1 uses `GameController` (`GCStylus`) + RealityKit
+`AnchoringComponent.AccessoryAnchoringSource` / `SpatialTrackingSession`
+(`.accessory`). Requires `NSAccessoryTrackingUsageDescription`.

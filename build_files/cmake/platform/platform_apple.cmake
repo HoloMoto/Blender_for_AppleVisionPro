@@ -257,11 +257,14 @@ endif()
 message(STATUS "Searching pre-compiled LIBDIR: ${LIBDIR}")
 
 if(WITH_APPLE_CROSSPLATFORM)
+  # Immersive Space / USDZ export need USD. libusd_ms references CPython symbols at
+  # load time — keep WITH_USD on when the dylib exists, and force-load libpython into
+  # the main executable (see creator/CMakeLists.txt) so Release/TestFlight exports
+  # _PyBaseObject_Type instead of stripping it.
   if(EXISTS "${LIBDIR}/usd/lib/libusd_ms.dylib")
     set(WITH_USD ON CACHE BOOL "Enable USD/USDZ import and export on iOS" FORCE)
     set(WITH_MATERIALX ON CACHE BOOL "MaterialX is required by USD on iOS" FORCE)
     message(STATUS "iOS USD: enabled (libusd_ms.dylib found in ${LIBDIR}/usd/lib)")
-    message(STATUS "iOS USD: rebuild host tools with -DWITH_USD=ON if makesrna/makesdna RNA mismatches occur")
   else()
     set(WITH_USD OFF CACHE BOOL "USD precompiled libraries not found in LIBDIR" FORCE)
     message(WARNING "iOS USD: disabled (expected ${LIBDIR}/usd/lib/libusd_ms.dylib)")
@@ -453,13 +456,15 @@ string(APPEND PLATFORM_CFLAGS " -pipe -funsigned-char -fno-strict-aliasing -ffp-
 if(WITH_APPLE_CROSSPLATFORM)
   if(APPLE_TARGET_DEVICE STREQUAL "visionos")
     # Vision Pro: RealityKit Immersive Space (no iPad ARKit preview on this path).
+    # Do NOT link CoreServices/IOKit — they pull macOS-style XPC paths and have
+    # caused instant dyld/XPC aborts on device (works under Xcode, dies in TestFlight).
     set(PLATFORM_LINKFLAGS
-      "-fexceptions -framework CoreServices -framework Foundation -framework IOKit -framework UIKit -framework AudioToolbox -framework CoreAudio -framework Metal -framework MetalKit -framework QuartzCore -framework ImageIO -framework GameController -framework CoreGraphics -framework UniformTypeIdentifiers -framework RealityKit -framework SwiftUI"
+      "-fexceptions -framework Foundation -framework UIKit -framework AudioToolbox -framework CoreAudio -framework Metal -framework MetalKit -framework QuartzCore -framework ImageIO -framework GameController -framework CoreGraphics -framework UniformTypeIdentifiers -framework RealityKit -framework SwiftUI"
     )
   else()
     # iPad / iPhone
     set(PLATFORM_LINKFLAGS
-      "-fexceptions -framework CoreServices -framework Foundation -framework IOKit -framework UIKit -framework AudioToolbox -framework CoreAudio -framework Metal -framework MetalKit -framework QuartzCore -framework ImageIO -framework GameController -framework CoreGraphics -framework UniformTypeIdentifiers -framework ARKit -framework SceneKit"
+      "-fexceptions -framework Foundation -framework UIKit -framework AudioToolbox -framework CoreAudio -framework Metal -framework MetalKit -framework QuartzCore -framework ImageIO -framework GameController -framework CoreGraphics -framework UniformTypeIdentifiers -framework ARKit -framework SceneKit"
     )
   endif()
   list(APPEND PLATFORM_LINKLIBS "${LIBDIR}/libb2/lib/libb2.a")

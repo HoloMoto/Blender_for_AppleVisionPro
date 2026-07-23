@@ -234,6 +234,10 @@ void WM_init(bContext *C, int argc, const char **argv)
 {
   fprintf(stderr, "[ios] WM_init enter\n");
   fflush(stderr);
+#if defined(WITH_APPLE_CROSSPLATFORM)
+  GHOST_IOS_yield_main_runloop();
+  GHOST_IOS_diag_log("wm: WM_init enter");
+#endif
 #if defined(WITH_APPLE_CROSSPLATFORM) && defined(WITH_METAL_BACKEND)
   /* iOS must use Metal backend. Avoid stale user/default backend values (e.g. OpenGL) that
    * would make ghost window creation assert before first frame. */
@@ -245,6 +249,10 @@ void WM_init(bContext *C, int argc, const char **argv)
 
   if (!G.background) {
     wm_ghost_init(C); /* NOTE: it assigns C to ghost! */
+#if defined(WITH_APPLE_CROSSPLATFORM)
+    GHOST_IOS_yield_main_runloop();
+    GHOST_IOS_diag_log("wm: after wm_ghost_init");
+#endif
     wm_init_cursor_data();
     BKE_sound_jack_sync_callback_set(sound_jack_sync_callback);
   }
@@ -349,6 +357,10 @@ void WM_init(bContext *C, int argc, const char **argv)
 #endif
 
   wm_homefile_read_ex(C, &read_homefile_params, nullptr, &params_file_read_post);
+#if defined(WITH_APPLE_CROSSPLATFORM)
+  GHOST_IOS_yield_main_runloop();
+  GHOST_IOS_diag_log("wm: after wm_homefile_read_ex");
+#endif
   wmWindowManager *wm_after_homefile = CTX_wm_manager(C);
   const int wm_window_count_after_homefile = wm_after_homefile ? BLI_listbase_count(&wm_after_homefile->windows) : -1;
   fprintf(stderr, "[ios] WM_init after homefile wm=%p windows=%d\n", (void *)wm_after_homefile, wm_window_count_after_homefile);
@@ -404,8 +416,16 @@ void WM_init(bContext *C, int argc, const char **argv)
   ED_spacemacros_init();
 
 #ifdef WITH_PYTHON
+#  if defined(WITH_APPLE_CROSSPLATFORM)
+  GHOST_IOS_diag_log("wm: before BPY_python_start");
+  GHOST_IOS_yield_main_runloop();
+#  endif
   BPY_python_start(C, argc, argv);
   BPY_python_reset(C);
+#  if defined(WITH_APPLE_CROSSPLATFORM)
+  GHOST_IOS_diag_log("wm: after BPY_python_start");
+  GHOST_IOS_yield_main_runloop();
+#  endif
 #else
   UNUSED_VARS(argc, argv);
 #endif

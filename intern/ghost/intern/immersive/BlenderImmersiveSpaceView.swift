@@ -18,8 +18,13 @@ import simd
   private func WM_IOS_immersive_set_object_z(
     _ objectName: UnsafePointer<CChar>, _ z: Float)
 
+  @_silgen_name("GHOST_IOS_immersive_muse_tick_set_enabled")
+  private func GHOST_IOS_immersive_muse_tick_set_enabled(_ enable: Bool)
+
   @MainActor
   private final class BlenderImmersiveObjectSync: ObservableObject {
+    /** Shared placement root (USD scene + Muse tip share this frame). */
+    private var worldRoot: Entity?
     private var rootEntity: Entity?
     private var activeEntity: Entity?
     private var activeObjectName = ""
@@ -32,27 +37,46 @@ import simd
     private var dragStartEntityPosition = SIMD3<Float>.zero
     private var isDragging = false
 
-    func configure(root: Entity, placementOffset: SIMD3<Float>) {
-      rootEntity = root
+    func configure(
+      worldRoot: Entity,
+      sceneRoot: Entity,
+      placementOffset: SIMD3<Float>,
+      generateCollisions: Bool = true
+    ) {
+      self.worldRoot = worldRoot
+      rootEntity = sceneRoot
       updatePlacement(offset: placementOffset)
       activeEntity = nil
       dragStartLocation = nil
       if !activeObjectName.isEmpty {
-        selectActiveEntity(name: activeObjectName, blenderLocation: blenderBaseLocation)
+        selectActiveEntity(
+          name: activeObjectName,
+          blenderLocation: blenderBaseLocation,
+          generateCollisions: generateCollisions)
       }
+    }
+
+    /** Shared placement root — used to reload USD without remaking Muse. */
+    var sharedWorldRoot: Entity? { worldRoot }
+
+    func bindWorldRoot(_ root: Entity) {
+      worldRoot = root
     }
 
     func updatePlacement(offset: SIMD3<Float>) {
       /* RealityKit is Y-up. Keep Blender's floor origin at Y=0 by default,
-       * with the scene placed 1.2 meters in front of the wearer. */
-      rootEntity?.position = SIMD3(offset.x, offset.y, -1.2 + offset.z)
+       * with the scene placed 1.2 meters in front of the wearer.
+       * Placement is applied to the shared world root (USD + Muse), not the
+       * USD file root alone — otherwise Muse tip and mesh frames diverge. */
+      worldRoot?.position = SIMD3(offset.x, offset.y, -1.2 + offset.z)
     }
 
     func updateActiveObject(name: String, blenderLocation: SIMD3<Float>) {
       guard !name.isEmpty else { return }
       if name != activeObjectName || activeEntity == nil {
         activeObjectName = name
-        selectActiveEntity(name: name, blenderLocation: blenderLocation)
+        selectActiveEntity(
+          name: name, blenderLocation: blenderLocation, generateCollisions: true)
         return
       }
 
@@ -97,7 +121,11 @@ import simd
       isDragging = false
     }
 
-    private func selectActiveEntity(name: String, blenderLocation: SIMD3<Float>) {
+    private func selectActiveEntity(
+      name: String,
+      blenderLocation: SIMD3<Float>,
+      generateCollisions: Bool = true
+    ) {
       guard let rootEntity else {
         blenderBaseLocation = blenderLocation
         return
@@ -132,7 +160,10 @@ import simd
       }
       entity.components.set(InputTargetComponent())
       entity.components.set(HoverEffectComponent())
-      entity.generateCollisionShapes(recursive: true)
+      /* Collision rebuild is expensive — skip on mid-stroke Immersive previews. */
+      if generateCollisions {
+        entity.generateCollisionShapes(recursive: true)
+      }
       print("[immersive] Active object sync: \(name)")
     }
 
@@ -187,39 +218,127 @@ import simd
     @State private var originX: Float = 0
     @State private var originHeight: Float = 0
     @State private var originDepth: Float = 0
+    /** Monotonic token so only the latest USD load may swap the scene. */
+    @State private var loadGeneration: UInt64 = 0
+    @State private var isLoadingModel = false
+    @State private var pendingModelReload = false
+    /** Skip expensive collision rebuild during rapid mid-stroke previews. */
+    @State private var lightModelReload = false
+    @State private var handMenuMode = BlenderImmersiveState.shared.handMenuMode
+    @State private var handMenuBrushKind = BlenderImmersiveState.shared.handMenuBrushKind
+    @State private var handMenuStrength = BlenderImmersiveState.shared.handMenuStrength
+    @State private var handMenuRadius = BlenderImmersiveState.shared.handMenuRadius
+    @State private var handMenuBrushLabel = BlenderImmersiveState.shared.handMenuBrushLabel
+    /** Float above left hand — Muse is typically held in the right hand.
+     * `.aboveHand` stays clear of the palm; Billboard keeps the panel facing the user
+     * so eye+pinch selection works regardless of wrist tilt. */
+    @State private var leftHandAnchor: Entity = AnchorEntity(
+      .hand(.left, location: .aboveHand), trackingMode: .continuous)
+    @State private var handMenuConfigured = false
     @StateObject private var objectSync = BlenderImmersiveObjectSync()
+    @StateObject private var musePen = BlenderImmersiveMusePenController()
 
     public init() {}
 
+    private func configureHandMenuEntity(_ menuEntity: Entity) {
+      if menuEntity.parent != leftHandAnchor {
+        leftHandAnchor.addChild(menuEntity)
+      }
+      /* Do not force a fixed Euler tilt — that left the panel edge-on / covering the hand. */
+      menuEntity.orientation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+      menuEntity.components.set(BillboardComponent())
+      menuEntity.position = SIMD3(0, 0.04, 0)
+      menuEntity.scale = SIMD3(repeating: 0.55)
+      handMenuConfigured = true
+    }
+
     public var body: some View {
-      ZStack(alignment: .bottom) {
-        RealityView { content in
-          await loadModel(into: content)
-        } update: { _ in
+      RealityView { content, attachments in
+          /* One shared world root owns both Muse and the USD scene so tip
+           * samples and mesh transforms share the same placement frame. */
+          let worldRoot = Entity()
+          worldRoot.name = "BlenderImmersiveWorld"
+          content.add(worldRoot)
+          worldRoot.position = SIMD3(
+            placementOffset.x, placementOffset.y, -1.2 + placementOffset.z)
+
+          objectSync.bindWorldRoot(worldRoot)
+          musePen.attach(to: worldRoot)
+          content.add(leftHandAnchor)
+          if let menuEntity = attachments.entity(for: "handMenu") {
+            configureHandMenuEntity(menuEntity)
+          }
+          await requestLoadModel(worldRoot: worldRoot)
+      } update: { _, attachments in
+          BlenderImmersiveState.shared.updatePlacement(
+            x: placementOffset.x, y: placementOffset.y, z: placementOffset.z)
           objectSync.updatePlacement(offset: placementOffset)
           objectSync.updateActiveObject(
             name: activeObjectName, blenderLocation: activeObjectLocation)
+          /* Attach once — re-applying orientation every frame fought Billboard and
+           * left the panel 90° off / covering the hand. */
+          if !handMenuConfigured, let menuEntity = attachments.entity(for: "handMenu") {
+            configureHandMenuEntity(menuEntity)
+          }
+      } attachments: {
+        Attachment(id: "handMenu") {
+          BlenderImmersiveHandMenuPanel(
+            mode: $handMenuMode,
+            brushKind: $handMenuBrushKind,
+            strength: $handMenuStrength,
+            radius: $handMenuRadius,
+            brushLabel: handMenuBrushLabel,
+            compact: true)
         }
-        .id("\(modelPath ?? "")#\(modelRevision)")
-        .gesture(
-          DragGesture()
-            .targetedToAnyEntity()
-            .onChanged { value in
-              guard let parent = objectSync.dragParent(for: value.entity) else { return }
-              let location = value.convert(value.location3D, from: .local, to: parent)
-              objectSync.dragChanged(hitEntity: value.entity, locationInParent: location)
-            }
-            .onEnded { _ in
-              objectSync.dragEnded()
-            })
-
-        placementControls
-          .padding(.bottom, 28)
+      }
+      /* Stable id: do NOT include modelRevision — remaking the RealityView on
+       * every USD refresh tears down Muse and races Edit/Sculpt interaction. */
+      .id("BlenderImmersiveSpace")
+      .gesture(
+        DragGesture()
+          .targetedToAnyEntity()
+          .onChanged { value in
+            guard let parent = objectSync.dragParent(for: value.entity) else { return }
+            let location = value.convert(value.location3D, from: .local, to: parent)
+            objectSync.dragChanged(hitEntity: value.entity, locationInParent: location)
+          }
+          .onEnded { _ in
+            objectSync.dragEnded()
+          })
+      .ornament(visibility: .automatic, attachmentAnchor: .scene(.bottom)) {
+        VStack(spacing: 12) {
+          Text(musePen.statusText)
+            .font(.caption)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .glassBackgroundEffect()
+          Text("左手の上にも同じメニュー")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+          BlenderImmersiveHandMenuPanel(
+            mode: $handMenuMode,
+            brushKind: $handMenuBrushKind,
+            strength: $handMenuStrength,
+            radius: $handMenuRadius,
+            brushLabel: handMenuBrushLabel,
+            compact: false)
+          placementControls
+        }
+        .padding(.bottom, 28)
       }
       .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveModelPathChanged)) {
         note in
         modelPath = note.object as? String
         modelRevision = BlenderImmersiveState.shared.modelRevision
+        /* GeometryLink-style: keep the old entity visible until the new USD is
+         * fully loaded, then atomically swap (attach new → detach old). */
+        let tipDown = musePen.isTipDown
+        lightModelReload = tipDown
+        if let worldRoot = objectSync.sharedWorldRoot {
+          Task { @MainActor in
+            await requestLoadModel(worldRoot: worldRoot)
+          }
+        }
       }
       .onReceive(
         NotificationCenter.default.publisher(for: .blenderImmersiveActiveObjectChanged)
@@ -236,8 +355,17 @@ import simd
         activeObjectLocation = SIMD3(
           xNumber.floatValue, yNumber.floatValue, zNumber.floatValue)
       }
+      .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveHandMenuChanged)) { _ in
+        handMenuMode = BlenderImmersiveState.shared.handMenuMode
+        handMenuBrushKind = BlenderImmersiveState.shared.handMenuBrushKind
+        handMenuStrength = BlenderImmersiveState.shared.handMenuStrength
+        handMenuRadius = BlenderImmersiveState.shared.handMenuRadius
+        handMenuBrushLabel = BlenderImmersiveState.shared.handMenuBrushLabel
+      }
       .onAppear {
         BlenderImmersiveState.shared.markActive(true)
+        /* Immersive Space often pauses the 2D MTKView; keep Muse→View3D sync alive. */
+        GHOST_IOS_immersive_muse_tick_set_enabled(true)
         modelRevision = BlenderImmersiveState.shared.modelRevision
         activeObjectName = BlenderImmersiveState.shared.activeObjectName ?? ""
         activeObjectLocation = SIMD3(
@@ -246,6 +374,8 @@ import simd
           BlenderImmersiveState.shared.activeObjectZ)
       }
       .onDisappear {
+        musePen.detach()
+        GHOST_IOS_immersive_muse_tick_set_enabled(false)
         BlenderImmersiveState.shared.markActive(false)
       }
     }
@@ -298,36 +428,82 @@ import simd
       }
     }
 
+    /**
+     * Coalesce overlapping reload requests (GeometryLink also replaces only
+     * after a complete load). While a load is in flight, mark pending and
+     * run once more with the latest path.
+     */
     @MainActor
-    private func loadModel(into content: RealityViewContent) async {
-      content.entities.removeAll()
+    private func requestLoadModel(worldRoot: Entity) async {
+      if isLoadingModel {
+        pendingModelReload = true
+        return
+      }
+      isLoadingModel = true
+      defer { isLoadingModel = false }
 
+      repeat {
+        pendingModelReload = false
+        await loadModel(worldRoot: worldRoot)
+      } while pendingModelReload
+    }
+
+    /**
+     * Flicker-free USD swap (inspired by GeometryLink ContentView):
+     * 1. Keep the current USD entity visible
+     * 2. Fully load the next USD off-parent
+     * 3. Attach the new entity, then remove the old one in the same turn
+     * Never remove-first — that blank gap is the Immersive flicker.
+     * See https://github.com/daniloc/GeometryLink/
+     */
+    @MainActor
+    private func loadModel(worldRoot: Entity) async {
+      loadGeneration &+= 1
+      let generation = loadGeneration
       let path = modelPath ?? BlenderImmersiveState.shared.modelPath
-      guard let path, !path.isEmpty else {
+
+      let newEntity: Entity
+      if let path, !path.isEmpty {
+        do {
+          /* Load while the previous USD stays on-screen. */
+          newEntity = try await Entity(contentsOf: URL(fileURLWithPath: path))
+        }
+        catch {
+          /* Keep the previous model if this revision failed. */
+          print("[immersive] Failed to load USDZ \(path): \(error)")
+          return
+        }
+      }
+      else {
         let placeholder = ModelEntity(
           mesh: .generateBox(size: 0.2),
           materials: [SimpleMaterial(color: .systemBlue, isMetallic: true)])
-        placeholder.position = SIMD3(0, 1.2, -1.0)
-        content.add(placeholder)
+        placeholder.position = SIMD3(0, 1.2, 0)
+        newEntity = placeholder
+      }
+
+      /* A newer reload started while we were awaiting — discard this result. */
+      guard generation == loadGeneration else {
         return
       }
 
-      let url = URL(fileURLWithPath: path)
-      do {
-        let entity = try await Entity(contentsOf: url)
-        /* USD exports Blender units as meters. Keep the authored scale exactly:
-         * the default 2x2x2 cube must appear as a 2-meter cube in visionOS. */
-        objectSync.configure(root: entity, placementOffset: placementOffset)
-        content.add(entity)
+      newEntity.name = "BlenderImmersiveUSD"
+      /* USD exports Blender units as meters. Keep the authored scale exactly:
+       * the default 2x2x2 cube must appear as a 2-meter cube in visionOS.
+       * Placement lives on worldRoot — leave the USD file root at identity. */
+
+      let oldUSD = worldRoot.children.filter { $0.name == "BlenderImmersiveUSD" }
+      worldRoot.addChild(newEntity)
+      for old in oldUSD {
+        old.removeFromParent()
       }
-      catch {
-        let placeholder = ModelEntity(
-          mesh: .generateBox(size: 0.2),
-          materials: [SimpleMaterial(color: .systemOrange, isMetallic: false)])
-        placeholder.position = SIMD3(0, 1.2, -1.0)
-        content.add(placeholder)
-        print("[immersive] Failed to load USDZ \(path): \(error)")
-      }
+
+      objectSync.configure(
+        worldRoot: worldRoot,
+        sceneRoot: newEntity,
+        placementOffset: placementOffset,
+        generateCollisions: !lightModelReload)
+      lightModelReload = false
     }
 
   }

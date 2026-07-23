@@ -55,6 +55,7 @@
 #include "RNA_enum_types.hh"
 #include "RNA_path.hh"
 #include "RNA_types.hh"
+#include "rna_internal_types.hh"
 
 #include "UI_resources.hh"
 
@@ -68,6 +69,44 @@
 #  include "BPY_extern.hh"
 #endif
 
+#ifndef WITH_USD
+/* Host makesrna may still emit a linked-list chain through RNA_USDHook even when
+ * this target is built without USD. A zero-initialized stub sets next=nullptr and
+ * severs every later type from RNA_init (Operator, WindowManager, themes, …) —
+ * bpy.types breaks and the UI never draws (builds 16–17).
+ * Keep identifier/flag for the map; preserve next/prev from rna_usd_gen.cc. */
+extern StructRNA RNA_ThemeFontStyle;
+extern StructRNA RNA_LayoutPanelState;
+StructRNA RNA_USDHook = {
+    /*cont*/
+    {(ContainerRNA *)&RNA_ThemeFontStyle,
+     (ContainerRNA *)&RNA_LayoutPanelState,
+     nullptr,
+     {nullptr, nullptr}},
+    /*identifier*/ "USDHook",
+    /*py_type*/ nullptr,
+    /*blender_type*/ nullptr,
+    /*flag*/ STRUCT_PUBLIC_NAMESPACE | STRUCT_UNDO,
+    /*prop_tag_defines*/ nullptr,
+    /*name*/ "USD Hook",
+    /*description*/ "USD IO hooks (disabled in this build)",
+    /*translation_context*/ "*",
+    /*icon*/ 0,
+    /*nameproperty*/ nullptr,
+    /*iteratorproperty*/ nullptr,
+    /*base*/ nullptr,
+    /*nested*/ nullptr,
+    /*refine*/ nullptr,
+    /*path*/ nullptr,
+    /*reg*/ nullptr,
+    /*unreg*/ nullptr,
+    /*instance*/ nullptr,
+    /*idproperties*/ nullptr,
+    /*system_idproperties*/ nullptr,
+    /*functions*/ {nullptr, nullptr},
+};
+#endif
+
 #include "rna_access_internal.hh"
 #include "rna_internal.hh"
 
@@ -78,6 +117,55 @@ static CLG_LogRef LOG = {"rna.access"};
 /* NOTE: Initializing this object here is fine for now, as it should not allocate any memory. */
 extern const PointerRNA PointerRNA_NULL = {};
 
+#ifdef WITH_APPLE_CROSSPLATFORM
+static void (*g_rna_init_progress_fn)(int structs_done) = nullptr;
+static StructRNA *g_rna_init_async_cursor = nullptr;
+
+void RNA_init_set_progress_fn(void (*fn)(int structs_done))
+{
+  g_rna_init_progress_fn = fn;
+}
+
+void RNA_init_async_begin()
+{
+  BLENDER_RNA.structs_map = BLI_ghash_str_new_ex(__func__, 2048);
+  BLENDER_RNA.structs_len = 0;
+  g_rna_init_async_cursor = static_cast<StructRNA *>(BLENDER_RNA.structs.first);
+}
+
+bool RNA_init_async_step(const int max_count)
+{
+  int n = 0;
+  while (g_rna_init_async_cursor != nullptr && n < max_count) {
+    StructRNA *srna = g_rna_init_async_cursor;
+    /* Same as desktop RNA_init for structs_map, but skip prop_lookup_set —
+     * building CustomIDVectorSet for every struct jetsams around ~1400 on TF. */
+    BLI_assert(srna->flag & STRUCT_PUBLIC_NAMESPACE);
+    BLI_ghash_insert(BLENDER_RNA.structs_map, (void *)srna->identifier, srna);
+    BLENDER_RNA.structs_len += 1;
+    g_rna_init_async_cursor = static_cast<StructRNA *>(srna->cont.next);
+    n += 1;
+  }
+  return g_rna_init_async_cursor == nullptr;
+}
+
+int RNA_init_async_progress()
+{
+  return int(BLENDER_RNA.structs_len);
+}
+
+int RNA_init_async_total_estimate()
+{
+  int n = 0;
+  for (StructRNA *srna = static_cast<StructRNA *>(BLENDER_RNA.structs.first); srna;
+       srna = static_cast<StructRNA *>(srna->cont.next))
+  {
+    n += 1;
+  }
+  return n;
+}
+#endif
+
 void RNA_init()
 {
   StructRNA *srna;
@@ -85,9 +173,20 @@ void RNA_init()
   BLENDER_RNA.structs_map = BLI_ghash_str_new_ex(__func__, 2048);
   BLENDER_RNA.structs_len = 0;
 
+  int structs_done = 0;
   for (srna = static_cast<StructRNA *>(BLENDER_RNA.structs.first); srna;
        srna = static_cast<StructRNA *>(srna->cont.next))
   {
+#ifdef WITH_APPLE_CROSSPLATFORM
+    /* Skip prop_lookup_set only — still register every struct like desktop. */
+    BLI_assert(srna->flag & STRUCT_PUBLIC_NAMESPACE);
+    BLI_ghash_insert(BLENDER_RNA.structs_map, (void *)srna->identifier, srna);
+    BLENDER_RNA.structs_len += 1;
+    structs_done += 1;
+    if (g_rna_init_progress_fn != nullptr && (structs_done % 16) == 0) {
+      g_rna_init_progress_fn(structs_done);
+    }
+#else
     if (!srna->cont.prop_lookup_set) {
       srna->cont.prop_lookup_set =
           MEM_new<blender::CustomIDVectorSet<PropertyRNA *, PropertyRNAIdentifierGetter>>(
@@ -102,7 +201,14 @@ void RNA_init()
     BLI_assert(srna->flag & STRUCT_PUBLIC_NAMESPACE);
     BLI_ghash_insert(BLENDER_RNA.structs_map, (void *)srna->identifier, srna);
     BLENDER_RNA.structs_len += 1;
+    structs_done += 1;
+#endif
   }
+#ifdef WITH_APPLE_CROSSPLATFORM
+  if (g_rna_init_progress_fn != nullptr) {
+    g_rna_init_progress_fn(structs_done);
+  }
+#endif
 }
 
 void RNA_bpy_exit()

@@ -113,6 +113,27 @@ int GHOST_iosmain(int argc, const char **argv);
 void GHOST_iosfinalize(bContext *C);
 
 #ifdef WITH_APPLE_CROSSPLATFORM
+extern "C" void GHOST_IOS_pump_main_runloop(void);
+extern "C" void GHOST_IOS_yield_main_runloop(void);
+extern "C" void GHOST_IOS_schedule_on_main(void (*fn)(void *userdata), void *userdata);
+extern "C" void GHOST_IOS_schedule_on_main_after(void (*fn)(void *userdata),
+                                                 void *userdata,
+                                                 double delay_seconds);
+extern "C" void GHOST_IOS_notify_launch_ui_ready(void);
+extern "C" void GHOST_IOS_diag_log(const char *message);
+
+static void ios_diag(const char *msg)
+{
+  GHOST_IOS_diag_log(msg);
+}
+
+/* Lightweight checkpoint: log only. Nested CFRunLoop yields burn the launch
+ * watchdog budget and do not reset it on TestFlight. */
+static void ios_step(const char *msg)
+{
+  GHOST_IOS_diag_log(msg);
+}
+
 static void configure_ios_bundle_resource_envvars()
 {
   const char *program_dir = BKE_appdir_program_dir();
@@ -133,16 +154,25 @@ static void configure_ios_bundle_resource_envvars()
   BLI_path_join(python_dir, sizeof(python_dir), assets_root, "python");
 
   if (BLI_is_dir(assets_root)) {
-    BLI_setenv_if_new("BLENDER_SYSTEM_RESOURCES", assets_root);
+    BLI_setenv("BLENDER_SYSTEM_RESOURCES", assets_root);
   }
   if (BLI_is_dir(datafiles_dir)) {
-    BLI_setenv_if_new("BLENDER_SYSTEM_DATAFILES", datafiles_dir);
+    /* Always set (not if_new): a stale/wrong env would hide Essentials brushes. */
+    BLI_setenv("BLENDER_SYSTEM_DATAFILES", datafiles_dir);
+
+    /* Hint for tools that re-read env; Plug_InitConfig itself already ran at
+     * libusd_ms load. USD_platform_runtime_init() also RegisterPlugins(). */
+    char usd_plugin_dir[FILE_MAX];
+    BLI_path_join(usd_plugin_dir, sizeof(usd_plugin_dir), datafiles_dir, "usd");
+    if (BLI_is_dir(usd_plugin_dir)) {
+      BLI_setenv("PXR_PLUGINPATH_NAME", usd_plugin_dir);
+    }
   }
   if (BLI_is_dir(scripts_dir)) {
-    BLI_setenv_if_new("BLENDER_SYSTEM_SCRIPTS", scripts_dir);
+    BLI_setenv("BLENDER_SYSTEM_SCRIPTS", scripts_dir);
   }
   if (BLI_is_dir(python_dir)) {
-    BLI_setenv_if_new("BLENDER_SYSTEM_PYTHON", python_dir);
+    BLI_setenv("BLENDER_SYSTEM_PYTHON", python_dir);
   }
 }
 #endif
@@ -256,6 +286,176 @@ static void callback_clg_fatal(void *fp)
   BLI_system_backtrace(static_cast<FILE *>(fp));
 }
 
+#ifdef WITH_APPLE_CROSSPLATFORM
+/**
+ * Heap state so startup can return to the *system* main runloop between stages.
+ * Nested CFRunLoopRunInMode does NOT reset the visionOS/TestFlight launch watchdog.
+ */
+struct IosLaunchState {
+  bContext *C = nullptr;
+#  ifndef WITH_PYTHON_MODULE
+  bArgs *ba = nullptr;
+#  endif
+  int argc = 0;
+  const char **argv = nullptr;
+  CreatorAtExitData app_init_data = {nullptr};
+};
+
+static IosLaunchState *g_ios_launch = nullptr;
+
+static void ios_launch_finish(void *userdata);
+static void ios_launch_wm(void *userdata);
+static void ios_launch_first_refresh(void *userdata);
+
+static void ios_launch_rna_step(void *userdata)
+{
+  IosLaunchState *st = static_cast<IosLaunchState *>(userdata);
+  static int batch = 0;
+  /* prop_lookup_set skipped on visionOS — batches are cheap; still delay so the
+   * launch watchdog sees frames. Died at ~1408 while allocating lookup sets. */
+  const bool done = RNA_init_async_step(128);
+  batch += 1;
+  if ((batch % 4) == 0 || done) {
+    char buf[160];
+    snprintf(buf,
+             sizeof(buf),
+             "creator: RNA_init async batch %d structs=%d done=%d",
+             batch,
+             RNA_init_async_progress(),
+             int(done));
+    ios_diag(buf);
+  }
+  if (!done) {
+    GHOST_IOS_schedule_on_main_after(ios_launch_rna_step, st, 0.016);
+    return;
+  }
+  ios_diag("creator: after RNA_init");
+  GHOST_IOS_schedule_on_main_after(ios_launch_finish, st, 0.016);
+}
+
+static void ios_launch_finish(void *userdata)
+{
+  IosLaunchState *st = static_cast<IosLaunchState *>(userdata);
+
+  RE_texture_rng_init();
+  ios_diag("creator: after RE_texture_rng_init");
+  RE_engines_init();
+  ios_diag("creator: after RE_engines_init");
+  blender::bke::node_system_init();
+  ios_diag("creator: after node_system_init");
+
+  BKE_brush_system_init();
+  BKE_particle_init_rng();
+  ios_diag("creator: after engines/nodes/brush init");
+
+  /* Next main-queue turn before WM_init (often the next long stall). */
+  GHOST_IOS_schedule_on_main_after(ios_launch_wm, st, 0.016);
+}
+
+static void ios_launch_wm(void *userdata)
+{
+  IosLaunchState *st = static_cast<IosLaunchState *>(userdata);
+  bContext *C = st->C;
+#  ifndef WITH_PYTHON_MODULE
+  bArgs *ba = st->ba;
+#  endif
+  const int argc = st->argc;
+  const char **argv = st->argv;
+  CreatorAtExitData &app_init_data = st->app_init_data;
+
+#  if defined(WITH_PYTHON_MODULE) || defined(WITH_HEADLESS)
+  G.background = true;
+  BKE_sound_force_device("None");
+#  else
+  if (G.background) {
+    main_signal_setup_background();
+  }
+#  endif
+
+  BKE_vfont_builtin_register(datatoc_bfont_pfb, datatoc_bfont_pfb_size);
+  BKE_sound_init_once();
+  BKE_materials_init();
+
+#  ifndef WITH_PYTHON_MODULE
+  if (G.background == 0) {
+    BLI_args_parse(ba, ARG_PASS_SETTINGS_GUI, nullptr, nullptr);
+  }
+  BLI_args_parse(ba, ARG_PASS_SETTINGS_FORCE, nullptr, nullptr);
+#  endif
+
+  fprintf(stderr, "[ios] before WM_init\n");
+  fflush(stderr);
+  ios_diag("creator: before WM_init");
+  WM_init(C, argc, argv);
+  fprintf(stderr, "[ios] after WM_init\n");
+  fflush(stderr);
+  ios_diag("creator: after WM_init");
+
+  /* Arm the MTKView draw loop BEFORE any further main-thread stalls.
+   * drawInMTKView only runs WM_main_loop_body when global C is set; if we
+   * call WM_main_entry first and it blocks, the UI freezes forever. */
+  GHOST_iosfinalize(C);
+  ios_diag("creator: after GHOST_iosfinalize (draw loop armed)");
+  GHOST_IOS_notify_launch_ui_ready();
+
+#  ifndef WITH_PYTHON
+  printf(
+      "\n* WARNING * - Blender compiled without Python!\n"
+      "this is not intended for typical usage\n\n");
+#  endif
+
+#  ifdef WITH_FREESTYLE
+  FRS_init();
+  FRS_set_context(C);
+#  endif
+
+#  ifndef WITH_PYTHON_MODULE
+  BLI_args_parse(ba, ARG_PASS_FINAL, main_args_handle_load_file, C);
+#  endif
+
+  callback_main_atexit(&app_init_data);
+  BKE_blender_atexit_unregister(callback_main_atexit, &app_init_data);
+
+#  ifndef WITH_PYTHON_MODULE
+  ba = nullptr;
+  st->ba = nullptr;
+  (void)ba;
+#  endif
+
+#  ifndef WITH_PYTHON_MODULE
+  if (G.background) {
+    int exit_code;
+    if (app_state.main_arg_deferred != nullptr) {
+      exit_code = main_arg_deferred_handle();
+      main_arg_deferred_free();
+    }
+    else {
+      exit_code = G.is_break ? EXIT_FAILURE : EXIT_SUCCESS;
+    }
+    WM_exit(C, exit_code);
+  }
+  else {
+    BLI_assert(app_state.main_arg_deferred == nullptr);
+    WM_init_splash_on_startup(C);
+
+    /* Return to the system runloop so MTKView can paint, then do the initial
+     * depsgraph refresh on a later turn (avoids deadlock with the draw path). */
+    ios_diag("creator: scheduling deferred WM_main_entry");
+    GHOST_IOS_schedule_on_main_after(ios_launch_first_refresh, st, 0.1);
+  }
+#  endif /* !WITH_PYTHON_MODULE */
+}
+
+static void ios_launch_first_refresh(void *userdata)
+{
+  IosLaunchState *st = static_cast<IosLaunchState *>(userdata);
+  bContext *C = st->C;
+  ios_diag("creator: before WM_main_entry");
+  WM_main_entry(C);
+  ios_diag("creator: after WM_main_entry");
+}
+#endif /* WITH_APPLE_CROSSPLATFORM */
+
 /** \} */
 
 /* -------------------------------------------------------------------- */
@@ -358,6 +558,9 @@ int main(int argc,
 {
   fprintf(stderr, "[ios] main_ios_callback begin\n");
   fflush(stderr);
+#ifdef WITH_APPLE_CROSSPLATFORM
+  ios_diag("creator: main_ios_callback begin");
+#endif
   bContext *C;
 #ifndef WITH_PYTHON_MODULE
   bArgs *ba;
@@ -498,14 +701,25 @@ int main(int argc,
   /* Initialize path to executable. */
   BKE_appdir_program_path_init(argv[0]);
 #ifdef WITH_APPLE_CROSSPLATFORM
+  ios_step("creator: after program_path_init");
   configure_ios_bundle_resource_envvars();
+  ios_step("creator: after configure_ios_bundle_resource_envvars");
 #endif
 
   BLI_threadapi_init();
+#ifdef WITH_APPLE_CROSSPLATFORM
+  ios_step("creator: after BLI_threadapi_init");
+#endif
 
   DNA_sdna_current_init();
+#ifdef WITH_APPLE_CROSSPLATFORM
+  ios_step("creator: after DNA_sdna_current_init");
+#endif
 
   BKE_blender_globals_init(); /* `blender.cc` */
+#ifdef WITH_APPLE_CROSSPLATFORM
+  ios_step("creator: after BKE_blender_globals_init");
+#endif
 
   BKE_cpp_types_init();
   BKE_idtype_init();
@@ -516,6 +730,9 @@ int main(int argc,
   DEG_register_node_types();
 
   BKE_callback_global_init();
+#ifdef WITH_APPLE_CROSSPLATFORM
+  ios_step("creator: after type/id/modifier init");
+#endif
 
 /* First test for background-mode (#Global.background). */
 #ifndef WITH_PYTHON_MODULE
@@ -537,6 +754,33 @@ int main(int argc,
   /* After parsing #ARG_PASS_ENVIRONMENT such as `--env-*`,
    * since they impact `BKE_appdir` behavior. */
   BKE_appdir_init();
+#ifdef WITH_APPLE_CROSSPLATFORM
+  ios_step("creator: after BKE_appdir_init");
+  {
+    char assets_path[FILE_MAX] = "";
+    const bool found = BKE_appdir_folder_id_ex(
+        BLENDER_SYSTEM_DATAFILES, "assets", assets_path, sizeof(assets_path));
+    char msg[FILE_MAX + 128];
+    SNPRINTF(msg,
+             "creator: essentials='%s' is_dir=%d",
+             found ? assets_path : "(empty)",
+             (found && BLI_is_dir(assets_path)) ? 1 : 0);
+    ios_step(msg);
+    if (found) {
+      char brush_path[FILE_MAX];
+      BLI_path_join(brush_path,
+                    sizeof(brush_path),
+                    assets_path,
+                    "brushes",
+                    "essentials_brushes-mesh_sculpt.blend");
+      SNPRINTF(msg,
+               "creator: sculpt_brush_blend exists=%d path='%s'",
+               BLI_exists(brush_path) ? 1 : 0,
+               brush_path);
+      ios_step(msg);
+    }
+  }
+#endif
 
   /* After parsing number of threads argument. */
   BLI_task_scheduler_init();
@@ -570,10 +814,46 @@ int main(int argc,
   IMB_init();
   /* Keep after #ARG_PASS_SETTINGS since debug flags are checked. */
   MOV_init();
+#ifdef WITH_APPLE_CROSSPLATFORM
+  ios_step("creator: after IMB/MOV_init");
+#endif
 
   /* After #ARG_PASS_SETTINGS arguments, this is so #WM_main_playanim skips #RNA_init. */
-  RNA_init();
+#ifdef WITH_APPLE_CROSSPLATFORM
+  /* True async staging: return to the system main runloop between RNA batches.
+   * Nested CFRunLoop yields do not reset the TestFlight launch watchdog. */
+  ios_diag("creator: RNA_init begin (async stages)");
+  RNA_init_async_begin();
+  {
+    char buf[96];
+    snprintf(buf,
+             sizeof(buf),
+             "creator: RNA_init total_estimate=%d (chain intact, no prop_lookup_set)",
+             RNA_init_async_total_estimate());
+    ios_diag(buf);
+  }
 
+  g_ios_launch = MEM_new<IosLaunchState>(__func__);
+  g_ios_launch->C = C;
+#  ifndef WITH_PYTHON_MODULE
+  g_ios_launch->ba = ba;
+  g_ios_launch->app_init_data.ba = ba;
+#  endif
+  g_ios_launch->argc = argc;
+  g_ios_launch->argv = argv;
+  g_ios_launch->app_init_data.early_exit = nullptr;
+
+  BKE_blender_atexit_unregister(callback_main_atexit, &app_init_data);
+  BKE_blender_atexit_register(callback_main_atexit, &g_ios_launch->app_init_data);
+
+  GHOST_IOS_schedule_on_main_after(ios_launch_rna_step, g_ios_launch, 0.05);
+  ios_diag("creator: returned to system runloop (RNA staged)");
+  return 0;
+#else
+  RNA_init();
+#endif
+
+#ifndef WITH_APPLE_CROSSPLATFORM
   RE_texture_rng_init();
   RE_engines_init();
   blender::bke::node_system_init();
@@ -671,28 +951,15 @@ int main(int argc,
     /* Shows the splash as needed. */
     WM_init_splash_on_startup(C);
 
-#  ifdef WITH_APPLE_CROSSPLATFORM
-    /* iOS Main loop handled differently. */
-    fprintf(stderr, "[ios] before WM_main_entry\n");
-    fflush(stderr);
-    WM_main_entry(C);
-    fprintf(stderr, "[ios] after WM_main_entry, before GHOST_iosfinalize\n");
-    fflush(stderr);
-    GHOST_iosfinalize(C);
-    fprintf(stderr, "[ios] after GHOST_iosfinalize\n");
-    fflush(stderr);
-#  else
     WM_main(C);
-#  endif
   }
-#  ifndef WITH_APPLE_CROSSPLATFORM
   /* Neither #WM_exit, #WM_main return, this quiets CLANG's `unreachable-code-return` warning. */
   BLI_assert_unreachable();
-#  endif
 
 #endif /* !WITH_PYTHON_MODULE */
 
   return 0;
+#endif /* !WITH_APPLE_CROSSPLATFORM */
 
 } /* End of `int main(...)` function. */
 

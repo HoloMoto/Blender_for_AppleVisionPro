@@ -57,6 +57,24 @@ void RNA_define_fallback_property_update(int noteflag, const char *updatefunc);
 void RNA_define_lib_overridable(bool make_overridable);
 
 void RNA_init();
+#ifdef WITH_APPLE_CROSSPLATFORM
+/**
+ * Optional progress hook called periodically during #RNA_init.
+ * Used on visionOS to yield the main runloop and avoid the launch watchdog.
+ */
+void RNA_init_set_progress_fn(void (*fn)(int structs_done));
+/** Begin batched RNA_init (call from main, then #RNA_init_async_step). */
+void RNA_init_async_begin();
+/**
+ * Process up to \a max_count structs.
+ * \return true when finished.
+ */
+bool RNA_init_async_step(int max_count);
+/** Structs processed so far by the async init path. */
+int RNA_init_async_progress();
+/** Total structs in the RNA list (for progress logs). */
+int RNA_init_async_total_estimate();
+#endif
 void RNA_bpy_exit();
 void RNA_exit();
 

@@ -2,7 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+#include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 #include "usd_utils.hh"
 
@@ -14,6 +16,7 @@
 
 #include "BKE_appdir.hh"
 
+#include <pxr/base/plug/registry.h>
 #include <pxr/base/tf/stringUtils.h>
 #include <pxr/base/tf/unicodeUtils.h>
 #include <pxr/usd/usd/prim.h>
@@ -36,10 +39,16 @@ void USD_platform_runtime_init()
     }
   };
 
+  /* Plug_InitConfig runs at libusd_ms load time and only reads PXR_PLUGINPATH_NAME
+   * then. setenv alone is too late — also RegisterPlugins with absolute paths so
+   * ArDefaultResolver (and schemas) are found before UsdStage::CreateNew. */
+  std::vector<std::string> plugin_paths;
+
   if (const std::optional<std::string> usd_datafiles = BKE_appdir_folder_id(
           BLENDER_SYSTEM_DATAFILES, "usd"))
   {
     set_env_if_unset("PXR_PLUGINPATH_NAME", usd_datafiles->c_str());
+    plugin_paths.push_back(*usd_datafiles);
   }
 
   if (const std::optional<std::string> datafiles_root = BKE_appdir_folder_id(
@@ -54,6 +63,7 @@ void USD_platform_runtime_init()
       if (existing == nullptr || existing[0] == '\0') {
         set_env_if_unset("PXR_PLUGINPATH_NAME", lib_usd);
       }
+      plugin_paths.push_back(lib_usd);
     }
 
     char mtlx_libs[FILE_MAX];
@@ -64,6 +74,20 @@ void USD_platform_runtime_init()
       set_env_if_unset("MATERIALX_SEARCH_PATH", mtlx_libs);
       set_env_if_unset("PXR_MTLX_STDLIB_SEARCH_PATHS", mtlx_libs);
     }
+  }
+
+  if (!plugin_paths.empty()) {
+    const pxr::PlugPluginPtrVector registered =
+        pxr::PlugRegistry::GetInstance().RegisterPlugins(plugin_paths);
+    fprintf(stderr,
+            "[ios] USD: RegisterPlugins paths=%zu plugins=%zu\n",
+            plugin_paths.size(),
+            size_t(registered.size()));
+    fflush(stderr);
+  }
+  else {
+    fprintf(stderr, "[ios] USD: WARNING no plugInfo paths found for RegisterPlugins\n");
+    fflush(stderr);
   }
 #else
   (void)0;

@@ -16,6 +16,7 @@
 // #define __CARBONSOUND__
 
 #include "GHOST_System.hh"
+#include "GHOST_Types.h"
 
 class GHOST_EventCursor;
 class GHOST_EventKey;
@@ -307,9 +308,17 @@ class GHOST_SystemIOS : public GHOST_System {
                             const char utf8_buf[6] = nullptr);
   void pushHardwareModifierFlags(GHOST_IWindow *window, uint32_t modifier_flags);
   void pushHardwareCursorMove(GHOST_IWindow *window, int32_t x, int32_t y);
+  void pushHardwareCursorMove(GHOST_IWindow *window,
+                              int32_t x,
+                              int32_t y,
+                              const GHOST_TabletData &tablet);
   void pushHardwareButtonEvent(GHOST_IWindow *window,
                                GHOST_TEventType type,
                                GHOST_TButton mask);
+  void pushHardwareButtonEvent(GHOST_IWindow *window,
+                               GHOST_TEventType type,
+                               GHOST_TButton mask,
+                               const GHOST_TabletData &tablet);
 
   /**
    * \see GHOST_ISystem

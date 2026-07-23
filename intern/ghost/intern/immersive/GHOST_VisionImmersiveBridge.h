@@ -35,6 +35,13 @@ void GHOST_Vision_update_active_object(const char *object_name,
                                        float blender_y,
                                        float blender_z);
 
+/** Push Immersive hand-menu state for the Swift UI. */
+void GHOST_Vision_update_hand_menu(int mode,
+                                   float strength,
+                                   float radius,
+                                   const char *brush_label,
+                                   int brush_kind);
+
 #ifdef __cplusplus
 }
 #endif
