@@ -263,7 +263,8 @@ public final class BlenderImmersiveMultiuserSession: NSObject {
   }
 
   private func handleJSONData(_ data: Data, from peer: MCPeerID) {
-    guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+    guard let raw = try? JSONSerialization.jsonObject(with: data),
+      let obj = raw as? [String: Any],
       let type = obj["t"] as? String
     else {
       return
