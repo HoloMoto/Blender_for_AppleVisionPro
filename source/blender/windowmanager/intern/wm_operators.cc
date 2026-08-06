@@ -4287,6 +4287,17 @@ static bool g_wm_ios_muse_tip_down = false;
 static bool g_wm_ios_muse_tip_just_released = false;
 /** Set when Muse actually changed mesh geometry — drives Immersive USD refresh. */
 static bool g_wm_ios_muse_geometry_dirty = false;
+/**
+ * Immersive USDZ re-export pacing (seconds). Tunable from Immersive sidebar.
+ * Shorter = snappier spatial scene, heavier; longer = lighter on CPU/GPU.
+ */
+static float g_wm_ios_usd_refresh_interval = 0.35f;
+/**
+ * When true, Object Mode location/rotation/scale changes also dirty the USD
+ * path so non-active meshes (games demos, etc.) appear in Immersive Space.
+ * Off by default — avoids fighting live active-object transform sync.
+ */
+static bool g_wm_ios_sync_transforms_to_space = false;
 
 /**
  * Called by BlenderImmersiveSpaceView.swift while dragging an entity. Queue the
@@ -4687,6 +4698,16 @@ extern "C" void WM_IOS_immersive_set_hand_as_pen(const int enabled)
 extern "C" void WM_IOS_immersive_set_hand_proximity_sculpt(const int enabled)
 {
   g_wm_ios_hand_proximity_sculpt = enabled != 0;
+}
+
+extern "C" void WM_IOS_immersive_set_usd_refresh_interval(const float seconds)
+{
+  g_wm_ios_usd_refresh_interval = std::clamp(seconds, 0.08f, 2.0f);
+}
+
+extern "C" void WM_IOS_immersive_set_sync_transforms_to_space(const int enabled)
+{
+  g_wm_ios_sync_transforms_to_space = enabled != 0;
 }
 
 extern "C" void WM_IOS_immersive_set_shader_space(const int enabled)
@@ -8790,6 +8811,55 @@ static uint64_t wm_ios_immersive_scene_mesh_fingerprint(bContext *C)
   return h;
 }
 
+/** Quantized world transform hash for optional Object-Mode Immersive refresh. */
+static uint64_t wm_ios_immersive_scene_transform_fingerprint(bContext *C)
+{
+  Scene *scene = CTX_data_scene(C);
+  ViewLayer *view_layer = CTX_data_view_layer(C);
+  if (scene == nullptr || view_layer == nullptr) {
+    return 0;
+  }
+  BKE_view_layer_synced_ensure(scene, view_layer);
+
+  uint64_t h = 14695981039346656037ull;
+  auto mix_i = [&h](int v) {
+    h ^= uint64_t(v) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+  };
+  auto mix_str = [&](const char *s) {
+    if (s == nullptr) {
+      return;
+    }
+    for (const unsigned char *p = reinterpret_cast<const unsigned char *>(s); *p; p++) {
+      h ^= uint64_t(*p);
+      h *= 1099511628211ull;
+    }
+  };
+
+  ListBase *bases = BKE_view_layer_object_bases_get(view_layer);
+  for (Base *base = static_cast<Base *>(bases->first); base != nullptr; base = base->next) {
+    Object *ob = base->object;
+    if (ob == nullptr || ob->type != OB_MESH) {
+      continue;
+    }
+    if ((base->flag & BASE_ENABLED_AND_MAYBE_VISIBLE_IN_VIEWPORT) == 0) {
+      continue;
+    }
+    mix_str(ob->id.name);
+    const float *wl = ob->object_to_world().location();
+    /* ~2 mm / ~0.5° quantization — absorbs float noise, still tracks play. */
+    mix_i(int(wl[0] * 500.0f));
+    mix_i(int(wl[1] * 500.0f));
+    mix_i(int(wl[2] * 500.0f));
+    mix_i(int(ob->rot[0] * 120.0f));
+    mix_i(int(ob->rot[1] * 120.0f));
+    mix_i(int(ob->rot[2] * 120.0f));
+    mix_i(int(ob->scale[0] * 100.0f));
+    mix_i(int(ob->scale[1] * 100.0f));
+    mix_i(int(ob->scale[2] * 100.0f));
+  }
+  return h;
+}
+
 static bool wm_ios_immersive_reload_usdz(bContext *C, Object *ob, const char *reason)
 {
   static uint64_t refresh_serial = 0;
@@ -8929,6 +8999,21 @@ static void wm_ios_immersive_sync_impl(bContext *C)
     g_wm_ios_muse_geometry_dirty = true;
   }
 
+  /* Optional: Object Mode transform changes → USD path (games demos, etc.). */
+  if (g_wm_ios_sync_transforms_to_space) {
+    static uint64_t last_xform_fp = 0;
+    static bool xform_fp_init = false;
+    const uint64_t xform_fp = wm_ios_immersive_scene_transform_fingerprint(C);
+    if (!xform_fp_init) {
+      last_xform_fp = xform_fp;
+      xform_fp_init = true;
+    }
+    else if (xform_fp != last_xform_fp) {
+      last_xform_fp = xform_fp;
+      g_wm_ios_muse_geometry_dirty = true;
+    }
+  }
+
   /* Edit/sculpt mesh changes cannot be represented by transform updates.
    * Re-export the USDZ after a short debounce and ask RealityKit to reload.
    * While a Muse tip stroke is active, skip export; reload soon after release.
@@ -8987,12 +9072,14 @@ static void wm_ios_immersive_sync_impl(bContext *C)
       GHOST_IOS_diag_log(buf);
     }
 
-    /* Live Immersive refresh: mid-stroke ~4 Hz so the user sees pressure deform;
-     * tip-up flushes immediately. Scene add / active switch: ~0.35s debounce. */
-    const double debounce = tip_just_released ? 0.05 :
-                            (g_wm_ios_muse_tip_down || interaction_active) ? 0.22 :
-                            (scene_structure_changed || active_object_changed) ? 0.35 :
-                                                                                 0.75;
+    /* Live Immersive refresh pacing — driven by Immersive sidebar
+     * ``usd_refresh_interval`` (default 0.35s). Tip-up stays near-immediate. */
+    const double interval = double(g_wm_ios_usd_refresh_interval);
+    const double debounce = tip_just_released ? std::min(0.05, interval) :
+                            (g_wm_ios_muse_tip_down || interaction_active) ?
+                                std::max(0.10, interval * 0.65) :
+                            (scene_structure_changed || active_object_changed) ? interval :
+                                                                                std::max(interval, 0.20);
     if (pending_update_count != 0 && (now - last_export_time) >= debounce) {
       /* Avoid mid-stroke full-scene swap when only structure changed. */
       if (interaction_active && !tip_just_released && !g_wm_ios_muse_geometry_dirty &&
@@ -9326,6 +9413,41 @@ static void WM_OT_ios_immersive_set_mode(wmOperatorType *ot)
               4);
 }
 
+static wmOperatorStatus wm_ios_immersive_set_usd_refresh_interval_exec(bContext * /*C*/,
+                                                                     wmOperator *op)
+{
+  WM_IOS_immersive_set_usd_refresh_interval(RNA_float_get(op->ptr, "seconds"));
+  return OPERATOR_FINISHED;
+}
+
+static void WM_OT_ios_immersive_set_usd_refresh_interval(wmOperatorType *ot)
+{
+  ot->name = "Immersive Set USD Refresh Interval";
+  ot->idname = "WM_OT_ios_immersive_set_usd_refresh_interval";
+  ot->description =
+      "Seconds between Immersive USDZ scene reloads when the spatial mesh is dirty";
+  ot->exec = wm_ios_immersive_set_usd_refresh_interval_exec;
+  ot->poll = wm_ios_immersive_poll;
+  RNA_def_float(ot->srna, "seconds", 0.35f, 0.08f, 2.0f, "Seconds", "", 0.08f, 2.0f);
+}
+
+static wmOperatorStatus wm_ios_immersive_set_sync_transforms_exec(bContext * /*C*/, wmOperator *op)
+{
+  WM_IOS_immersive_set_sync_transforms_to_space(RNA_boolean_get(op->ptr, "enable") ? 1 : 0);
+  return OPERATOR_FINISHED;
+}
+
+static void WM_OT_ios_immersive_set_sync_transforms(wmOperatorType *ot)
+{
+  ot->name = "Immersive Sync Object Transforms";
+  ot->idname = "WM_OT_ios_immersive_set_sync_transforms";
+  ot->description =
+      "Also push Object Mode moves/scales into Immersive via USD (needed for multi-object demos)";
+  ot->exec = wm_ios_immersive_set_sync_transforms_exec;
+  ot->poll = wm_ios_immersive_poll;
+  RNA_def_boolean(ot->srna, "enable", false, "Enable", "Sync transforms into Immersive Space");
+}
+
 static wmOperatorStatus wm_ios_immersive_remesh_exec(bContext * /*C*/, wmOperator * /*op*/)
 {
   WM_IOS_immersive_hand_menu_remesh();
@@ -9399,6 +9521,8 @@ void wm_operatortypes_register()
   WM_operatortype_append(WM_OT_ios_immersive_set_radius);
   WM_operatortype_append(WM_OT_ios_immersive_set_dyntopo);
   WM_operatortype_append(WM_OT_ios_immersive_set_mode);
+  WM_operatortype_append(WM_OT_ios_immersive_set_usd_refresh_interval);
+  WM_operatortype_append(WM_OT_ios_immersive_set_sync_transforms);
   WM_operatortype_append(WM_OT_ios_immersive_remesh);
   WM_operatortype_append(WM_OT_ios_immersive_multiuser_host);
   WM_operatortype_append(WM_OT_ios_immersive_multiuser_join);

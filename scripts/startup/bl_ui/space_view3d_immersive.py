@@ -49,6 +49,18 @@ def _update_mode(self, context):
     bpy.ops.wm.ios_immersive_set_mode(mode=int(self.mode))
 
 
+def _update_usd_refresh_interval(self, context):
+    if not hasattr(bpy.ops.wm, "ios_immersive_set_usd_refresh_interval"):
+        return
+    bpy.ops.wm.ios_immersive_set_usd_refresh_interval(seconds=self.usd_refresh_interval)
+
+
+def _update_sync_transforms(self, context):
+    if not hasattr(bpy.ops.wm, "ios_immersive_set_sync_transforms"):
+        return
+    bpy.ops.wm.ios_immersive_set_sync_transforms(enable=self.sync_transforms_to_space)
+
+
 class ImmersiveOptions(PropertyGroup):
     use_hand_as_pen: BoolProperty(
         name="手をペン代わりに",
@@ -97,6 +109,29 @@ class ImmersiveOptions(PropertyGroup):
         default='2',
         update=_update_mode,
     )
+    sync_transforms_to_space: BoolProperty(
+        name="物体移動も空間へ反映",
+        description=(
+            "複数オブジェクトの移動・拡大縮小も Immersive に送る"
+            "（テトリス等のデモ向け。重いので必要なときだけ）"
+        ),
+        default=False,
+        update=_update_sync_transforms,
+    )
+    usd_refresh_interval: FloatProperty(
+        name="空間更新間隔",
+        description=(
+            "Immersive への USD 再出力の間隔（秒）。"
+            "短い=サクサクだが重い / 長い=軽い。デフォルト 0.35"
+        ),
+        default=0.35,
+        min=0.08,
+        max=2.0,
+        soft_min=0.1,
+        soft_max=1.0,
+        precision=2,
+        update=_update_usd_refresh_interval,
+    )
 
 
 class ImmersivePanelBase:
@@ -125,6 +160,15 @@ class ImmersivePanelBase:
         help_col.label(text="ON: 右手の甲=ブラシ位置")
         help_col.label(text="発火: ピンチ / 近接 を切替")
         help_col.label(text="OFF: Logitech Muse")
+
+        box = layout.box()
+        box.label(text="空間シーン同期", icon='FILE_REFRESH')
+        box.prop(opts, "sync_transforms_to_space")
+        box.prop(opts, "usd_refresh_interval", slider=True)
+        hint = box.column(align=True)
+        hint.scale_y = 0.85
+        hint.label(text="短い=速いが重い / 長い=軽い")
+        hint.label(text="デモ時は「物体移動も…」をON")
 
         box = layout.box()
         box.label(text="スカルプト", icon='SCULPTMODE_HLT')
