@@ -16,7 +16,7 @@ Minimal probe::
 
     import blender_visionos as vision
 
-    if not vision.available:
+    if not vision.available():
         print("Not a Vision Pro build")
     else:
         print("caps", vision.capabilities())
@@ -25,6 +25,7 @@ Minimal probe::
             print("right index", snap.right.index_tip)
 
 Immersive Space must be open for live hand samples.
+Full reference: ``docs/VISIONOS_API.md``.
 """
 
 from __future__ import annotations

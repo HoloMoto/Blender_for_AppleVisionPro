@@ -3,6 +3,9 @@
 This branch is **Apple Vision Pro / visionOS Immersive Space** only.
 iPad camera AR lives on **`ipad-mr`**.
 
+Add-on platform API (`blender_visionos` hands / capabilities):
+see **[VISIONOS_API.md](./VISIONOS_API.md)**.
+
 ## Branch map
 
 | Branch | Purpose |

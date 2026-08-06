@@ -8,11 +8,18 @@
 
 #include "WM_ios_visionos_api.h"
 
+#include "BKE_global.hh"
+#include "BKE_main.hh"
+#include "BKE_report.hh"
+#include "WM_api.hh"
+
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 
 #if defined(WITH_APPLE_CROSSPLATFORM)
 #  define BLENDER_VISIONOS_HOST 1
+extern "C" void GHOST_IOS_diag_log(const char *message);
 #else
 #  define BLENDER_VISIONOS_HOST 0
 #endif
@@ -100,5 +107,36 @@ extern "C" void BLENDER_VISIONOS_set_immersive_active(int active)
   }
 #else
   (void)active;
+#endif
+}
+
+extern "C" void BLENDER_IOS_py_stdout_line(const char *line, const int is_err)
+{
+  if (line == nullptr) {
+    return;
+  }
+#if BLENDER_VISIONOS_HOST
+  /* Truncate very long lines for the report banner / Info list. */
+  char buf[1024];
+  const size_t n = std::strlen(line);
+  const char *msg = line;
+  if (n >= sizeof(buf)) {
+    std::memcpy(buf, line, sizeof(buf) - 4);
+    buf[sizeof(buf) - 4] = '.';
+    buf[sizeof(buf) - 3] = '.';
+    buf[sizeof(buf) - 2] = '.';
+    buf[sizeof(buf) - 1] = '\0';
+    msg = buf;
+  }
+  GHOST_IOS_diag_log(msg);
+  /* Before WM exists, only the device log is available. */
+  if (G_MAIN == nullptr || G_MAIN->wm.first == nullptr) {
+    return;
+  }
+  WM_global_report(is_err ? RPT_WARNING : RPT_INFO, msg);
+#else
+  (void)is_err;
+  fputs(line, is_err ? stderr : stdout);
+  fputc('\n', is_err ? stderr : stdout);
 #endif
 }

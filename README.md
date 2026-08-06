@@ -16,6 +16,11 @@ Status
 
 Experimental. Usable for development and testing on device; not a release build.
 
+Primary branch for Vision Pro Immersive work: **`immersive-space`**
+(remote `visionpro` → [HoloMoto/Blender_for_AppleVisionPro](https://github.com/HoloMoto/Blender_for_AppleVisionPro)).
+
+Current TestFlight build track: **90+** (visionOS Immersive Space host).
+
 Demo on Vision Pro
 ------------------
 
@@ -23,13 +28,49 @@ Latest on-device behavior (visionOS):
 
 [![Vision Pro demo](https://img.youtube.com/vi/7AkiuEGJ1lk/hqdefault.jpg)](https://youtu.be/7AkiuEGJ1lk)
 
-Recent platform work includes:
+Documentation
+-------------
 
-- visionOS / iOS / iPadOS build and packaging
-- USD / USDZ import and export
-- Preferences and file-picker UI on iOS
-- Vision Pro Bluetooth mouse input (in progress)
-- Cycles Metal GPU on Apple Silicon
+| Doc | Contents |
+|-----|----------|
+| [docs/VISIONOS_API.md](docs/VISIONOS_API.md) | **Add-on platform API** (`blender_visionos`) — hands, capabilities, C ABI, `print`→Info |
+| [docs/IMMERSIVE_SPACE.md](docs/IMMERSIVE_SPACE.md) | Immersive Space branch behavior, Muse, Multiuser MVP, build flags |
+
+Vision OS Platform API (summary)
+--------------------------------
+
+Goal: treat Vision Pro Blender as an **extensible creation host**, not a sealed app.
+Sensors and Immersive plumbing live in the host; tools are written with **`bpy` + `blender_visionos`**.
+
+```python
+import blender_visionos as vision
+
+if vision.available():
+    print(sorted(vision.capabilities()))  # e.g. hand_tracking, immersive_active
+    snap = vision.hands.snapshot()        # Immersive Space must be open
+    if snap.right.tracked:
+        print(snap.right.index_tip, snap.right.pinch)
+```
+
+- **Live joints (API v1):** wrist, palm, thumb tip, index tip + pinch  
+- **Placeholder (copy palm until SDK grows):** middle / ring / little tips  
+- **Stdout:** on-device `print()` appears in the **Info** editor (no system console)  
+- **Example add-on:** Preferences → Add-ons → *VisionOS Hand Probe*  
+  (`scripts/addons_core/visionos_hand_probe.py`)
+
+Full reference: **[docs/VISIONOS_API.md](docs/VISIONOS_API.md)**.
+
+Recent platform work
+--------------------
+
+- visionOS Immersive Space (RealityKit) + USDZ scene mirror
+- **`blender_visionos` platform API** (hand tracking for add-ons)
+- Spatial shading node board (opt-in; crash-hardened)
+- User preferences / add-on restore + hardened in-process pip path
+- Muse pen sculpt / hand menu / Vision Multiuser MVP
+- `print` → Info reports on visionOS
+- USD / USDZ import and export; Cycles Metal on Apple Silicon
+- iOS / iPadOS packaging (see also branch `ipad-mr` for iPad AR)
 
 Requirements
 ------------

@@ -554,6 +554,14 @@ void BPY_python_start(bContext *C, int argc, const char **argv)
       "except Exception as exc:\n"
       "    import sys\n"
       "    print('blender_ios_pip failed:', exc, file=sys.stderr)\n");
+  /* Route print() to Info reports — no system console on visionOS. */
+  PyRun_SimpleString(
+      "try:\n"
+      "    import blender_ios_stdout\n"
+      "    blender_ios_stdout.bootstrap_at_startup()\n"
+      "except Exception as exc:\n"
+      "    import sys\n"
+      "    print('blender_ios_stdout failed:', exc, file=sys.stderr)\n");
 #endif
 
 #  ifdef WITH_FLUID

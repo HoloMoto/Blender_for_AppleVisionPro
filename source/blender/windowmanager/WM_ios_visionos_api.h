@@ -82,6 +82,13 @@ void BLENDER_VISIONOS_hand_publish(const BLENDER_VISIONOS_HandSnapshot *in);
 /** Mark Immersive Space active/inactive for capability bits. */
 void BLENDER_VISIONOS_set_immersive_active(int active);
 
+/**
+ * Route one line of Python ``print`` / stderr to Info reports (+ device log).
+ * Used on Apple Immersive builds where there is no system console window.
+ * \param is_err Non-zero for stderr-style (WARNING), else INFO.
+ */
+void BLENDER_IOS_py_stdout_line(const char *line, int is_err);
+
 #ifdef __cplusplus
 }
 #endif
