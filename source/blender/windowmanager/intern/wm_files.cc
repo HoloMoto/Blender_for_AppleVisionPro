@@ -747,7 +747,7 @@ static void wm_file_read_post(bContext *C,
     CTX_wm_window_set(C, static_cast<wmWindow *>(wm->windows.first));
   }
 
-#if defined(WITH_PYTHON) && !defined(WITH_APPLE_CROSSPLATFORM)
+#if defined(WITH_PYTHON)
   if (is_startup_file) {
     /* The following block handles data & preferences being reloaded
      * which requires resetting some internal variables. */
@@ -790,7 +790,7 @@ static void wm_file_read_post(bContext *C,
   }
 #else
   UNUSED_VARS(is_startup_file, reset_app_template);
-#endif /* WITH_PYTHON && !WITH_APPLE_CROSSPLATFORM */
+#endif /* WITH_PYTHON */
 
   Main *bmain = CTX_data_main(C);
   if (bmain == nullptr) {
@@ -1369,7 +1369,7 @@ void wm_homefile_read_ex(bContext *C,
   }
 
   if (use_userdef || reset_app_template) {
-#if defined(WITH_PYTHON) && !defined(WITH_APPLE_CROSSPLATFORM)
+#if defined(WITH_PYTHON)
     /* This only runs once Blender has already started. */
     if (!params_homefile->is_first_time) {
       BLI_assert(CTX_py_init_get(C));
@@ -1382,7 +1382,7 @@ void wm_homefile_read_ex(bContext *C,
       const char *imports[] = {"addon_utils", nullptr};
       BPY_run_string_eval(C, imports, "addon_utils.disable_all()");
     }
-#endif /* WITH_PYTHON && !WITH_APPLE_CROSSPLATFORM */
+#endif /* WITH_PYTHON */
   }
 
   if (use_data) {

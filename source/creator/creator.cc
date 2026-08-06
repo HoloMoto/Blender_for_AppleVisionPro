@@ -174,6 +174,17 @@ static void configure_ios_bundle_resource_envvars()
   if (BLI_is_dir(python_dir)) {
     BLI_setenv("BLENDER_SYSTEM_PYTHON", python_dir);
   }
+
+  /* Writable pip/user site-packages under the app Documents folder. */
+  {
+    const char *home = BLI_getenv("HOME");
+    if (home != nullptr && home[0] != '\0') {
+      char user_site[FILE_MAX];
+      BLI_path_join(user_site, sizeof(user_site), home, "Documents", "Blender", "python",
+                    "site-packages");
+      BLI_setenv("BLENDER_USER_SITE_PACKAGES", user_site);
+    }
+  }
 }
 #endif
 

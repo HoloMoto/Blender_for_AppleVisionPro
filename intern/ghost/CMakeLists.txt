@@ -207,11 +207,18 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
         enable_language(Swift)
         add_definitions(-DWITH_VISIONOS_IMMERSIVE_SPACE)
         list(APPEND SRC
+          intern/immersive/BlenderImmersiveCoords.swift
           intern/immersive/BlenderImmersiveState.swift
           intern/immersive/BlenderImmersiveBridge.swift
           intern/immersive/BlenderImmersiveMusePen.swift
+          intern/immersive/BlenderImmersiveHandPen.swift
+          intern/immersive/BlenderVisionOSPlatform.swift
+          intern/immersive/BlenderImmersiveSpatialTracking.swift
           intern/immersive/BlenderImmersiveHandMenu.swift
+          intern/immersive/BlenderImmersiveViewportPanel.swift
+          intern/immersive/BlenderImmersiveShaderOverlay.swift
           intern/immersive/BlenderImmersiveMultiuser.swift
+          intern/immersive/BlenderImmersiveSharedAnchor.swift
           intern/immersive/BlenderImmersiveSpaceView.swift
           intern/immersive/BlenderIOSDiagnosticLog.swift
           intern/immersive/BlenderVisionApp.swift

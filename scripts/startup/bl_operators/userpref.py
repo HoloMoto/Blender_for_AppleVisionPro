@@ -1295,6 +1295,84 @@ class PREFERENCES_OT_script_directory_remove(Operator):
         return {'FINISHED'}
 
 
+class PREFERENCES_OT_ios_pip_install(Operator):
+    """Install a Python package into Documents (visionOS / iOS in-process pip)"""
+    bl_idname = "preferences.ios_pip_install"
+    bl_label = "Install Python Package"
+
+    package: StringProperty(
+        name="Package",
+        description="PyPI package name (e.g. music21, chardet)",
+        default="",
+    )
+    no_deps: BoolProperty(
+        name="No Dependencies",
+        description=(
+            "Install package only (--no-deps). "
+            "Use when dependencies need native visionOS wheels (e.g. numpy)"
+        ),
+        default=False,
+    )
+
+    def execute(self, context):
+        import blender_ios_pip
+        name = (self.package or "").strip()
+        if not name:
+            self.report({'ERROR'}, "Package name is empty")
+            return {'CANCELLED'}
+        # Allow "pkg1 pkg2" or "pkg1,pkg2"
+        packages = [p.strip() for p in name.replace(",", " ").split() if p.strip()]
+        ok, msg = blender_ios_pip.install_packages(packages, no_deps=self.no_deps)
+        if ok:
+            self.report({'INFO'}, msg[:512] if msg else "Installed")
+            return {'FINISHED'}
+        self.report({'ERROR'}, (msg or "Install failed")[:512])
+        return {'CANCELLED'}
+
+    def invoke(self, context, _event):
+        return context.window_manager.invoke_props_dialog(self, width=420)
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.prop(self, "package")
+        layout.prop(self, "no_deps")
+        layout.label(text="Installs into Documents/Blender/python/site-packages", icon='INFO')
+        layout.label(text="Console: import blender_ios_pip as p; p.status()", icon='CONSOLE')
+
+
+
+class PREFERENCES_OT_ios_pip_uninstall(Operator):
+    """Remove a package folder from Documents site-packages"""
+    bl_idname = "preferences.ios_pip_uninstall"
+    bl_label = "Uninstall Python Package"
+
+    package: StringProperty(
+        name="Package",
+        description="Package name to remove from Documents site-packages",
+        default="",
+    )
+
+    def execute(self, context):
+        import blender_ios_pip
+        name = (self.package or "").strip()
+        if not name:
+            self.report({'ERROR'}, "Package name is empty")
+            return {'CANCELLED'}
+        packages = [p.strip() for p in name.replace(",", " ").split() if p.strip()]
+        ok, msg = blender_ios_pip.uninstall_packages(packages)
+        if ok:
+            self.report({'INFO'}, msg[:512] if msg else "Removed")
+            return {'FINISHED'}
+        self.report({'ERROR'}, (msg or "Uninstall failed")[:512])
+        return {'CANCELLED'}
+
+    def invoke(self, context, _event):
+        return context.window_manager.invoke_props_dialog(self, width=400)
+
+    def draw(self, _context):
+        self.layout.prop(self, "package")
+
+
 classes = (
     PREFERENCES_OT_addon_disable,
     PREFERENCES_OT_addon_enable,
@@ -1305,6 +1383,8 @@ classes = (
     PREFERENCES_OT_addon_show,
     PREFERENCES_OT_app_template_install,
     PREFERENCES_OT_copy_prev,
+    PREFERENCES_OT_ios_pip_install,
+    PREFERENCES_OT_ios_pip_uninstall,
     PREFERENCES_OT_keyconfig_activate,
     PREFERENCES_OT_keyconfig_export,
     PREFERENCES_OT_keyconfig_import,

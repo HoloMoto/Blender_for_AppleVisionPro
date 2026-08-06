@@ -546,6 +546,14 @@ void BPY_python_start(bContext *C, int argc, const char **argv)
       "except Exception as exc:\n"
       "    import sys\n"
       "    print('blender_appstore_fwork failed:', exc, file=sys.stderr)\n");
+  /* Writable Documents site-packages + in-process pip target. */
+  PyRun_SimpleString(
+      "try:\n"
+      "    import blender_ios_pip\n"
+      "    blender_ios_pip.bootstrap_at_startup()\n"
+      "except Exception as exc:\n"
+      "    import sys\n"
+      "    print('blender_ios_pip failed:', exc, file=sys.stderr)\n");
 #endif
 
 #  ifdef WITH_FLUID

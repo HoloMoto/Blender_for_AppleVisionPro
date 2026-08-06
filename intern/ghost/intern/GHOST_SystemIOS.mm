@@ -827,6 +827,37 @@ void GHOST_iosfinalize(bContext *CTX)
   if (system != nullptr && system->current_active_window_ != nullptr) {
     UIWindow *win = system->current_active_window_->rootWindow;
     if (win != nil) {
+#if TARGET_OS_VISION
+      /* Re-sync to the live WindowScene bounds after SwiftUI layout settles.
+       * Startup often creates GHOST before the final volume size is known. */
+      UIWindowScene *window_scene = win.windowScene;
+      if (window_scene == nil) {
+        window_scene = GHOST_IOS_GetActiveWindowScene();
+        if (window_scene == nil) {
+          window_scene = ghost_ios_pick_active_window_scene();
+        }
+        if (window_scene != nil) {
+          win.windowScene = window_scene;
+        }
+      }
+      if (window_scene != nil) {
+        const CGRect scene_bounds = window_scene.coordinateSpace.bounds;
+        if (scene_bounds.size.width > 1.0 && scene_bounds.size.height > 1.0) {
+          win.frame = scene_bounds;
+          win.clipsToBounds = YES;
+          if (win.rootViewController.view != nil) {
+            win.rootViewController.view.frame = win.bounds;
+          }
+          system->pushEvent(new GHOST_Event(
+              system->getMilliSeconds(), GHOST_kEventWindowSize, system->current_active_window_));
+          fprintf(stderr,
+                  "[ios] GHOST_iosfinalize synced frame=%.0fx%.0f\n",
+                  scene_bounds.size.width,
+                  scene_bounds.size.height);
+          fflush(stderr);
+        }
+      }
+#endif
       win.windowLevel = UIWindowLevelNormal + 1;
       [win makeKeyAndVisible];
       system->current_active_window_->setRenderingPaused(false);

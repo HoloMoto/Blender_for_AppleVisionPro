@@ -22,6 +22,178 @@ import simd
   @_silgen_name("GHOST_IOS_immersive_muse_tick_set_enabled")
   private func GHOST_IOS_immersive_muse_tick_set_enabled(_ enable: Bool)
 
+  @_silgen_name("WM_IOS_immersive_viewer_pose_sample")
+  private func WM_IOS_immersive_viewer_pose_sample(_ mat16: UnsafePointer<Float>)
+
+  /**
+   * Track the wearer's head relative to Immersive worldRoot and push a
+   * Blender-space camera matrix for 「視点→カメラにキー」.
+   */
+  @MainActor
+  private final class BlenderImmersiveViewerPoseTracker: ObservableObject {
+    private var headAnchor: AnchorEntity?
+    private weak var worldRoot: Entity?
+    private var sampleTask: Task<Void, Never>?
+
+    func attach(content: inout RealityViewContent, worldRoot: Entity) {
+      if headAnchor == nil {
+        let head = AnchorEntity(.head)
+        head.name = "BlenderImmersiveHead"
+        content.add(head)
+        headAnchor = head
+      }
+      self.worldRoot = worldRoot
+      startSampling()
+    }
+
+    func detach() {
+      sampleTask?.cancel()
+      sampleTask = nil
+      headAnchor?.removeFromParent()
+      headAnchor = nil
+      worldRoot = nil
+    }
+
+    private func startSampling() {
+      sampleTask?.cancel()
+      sampleTask = Task { @MainActor in
+        while !Task.isCancelled {
+          sampleOnce()
+          try? await Task.sleep(nanoseconds: 33_333_333)
+        }
+      }
+    }
+
+    private func sampleOnce() {
+      guard let head = headAnchor, let root = worldRoot else { return }
+      let local = head.transformMatrix(relativeTo: root)
+      let blender = BlenderImmersiveCoords.realityKitMatrixToBlender(local)
+      var packed: [Float] = [
+        blender.columns.0.x, blender.columns.0.y, blender.columns.0.z, blender.columns.0.w,
+        blender.columns.1.x, blender.columns.1.y, blender.columns.1.z, blender.columns.1.w,
+        blender.columns.2.x, blender.columns.2.y, blender.columns.2.z, blender.columns.2.w,
+        blender.columns.3.x, blender.columns.3.y, blender.columns.3.z, blender.columns.3.w,
+      ]
+      packed.withUnsafeBufferPointer { buf in
+        guard let base = buf.baseAddress else { return }
+        WM_IOS_immersive_viewer_pose_sample(base)
+      }
+    }
+  }
+
+  /** Blender world (x,y,z) → RealityKit local (x,z,-y). */
+  private func blenderToRealityKitCoord(_ b: SIMD3<Float>) -> SIMD3<Float> {
+    BlenderImmersiveCoords.blenderToRealityKit(b)
+  }
+
+  @MainActor
+  private final class BlenderImmersiveBoneOverlay: ObservableObject {
+    private var root = Entity()
+    private var boneEntities: [ModelEntity] = []
+    private var attached = false
+    private var lastSignature: UInt64 = 0
+
+    func attach(to worldRoot: Entity) {
+      if !attached {
+        root.name = "BlenderImmersiveBones"
+        worldRoot.addChild(root)
+        attached = true
+      }
+    }
+
+    func clear() {
+      for e in boneEntities {
+        e.removeFromParent()
+      }
+      boneEntities.removeAll()
+      root.isEnabled = false
+      lastSignature = 0
+    }
+
+    func update(packed: [Float], count: Int, visible: Bool) {
+      guard visible, count > 0, packed.count >= count * 7 else {
+        clear()
+        return
+      }
+
+      var sig: UInt64 = UInt64(count)
+      for i in 0..<min(count * 7, packed.count) {
+        sig = sig &* 1_099_511_628_211 &+ UInt64(packed[i].bitPattern)
+      }
+      if sig == lastSignature && root.isEnabled {
+        return
+      }
+      lastSignature = sig
+      root.isEnabled = true
+
+      struct BoneSeg {
+        var mid: SIMD3<Float>
+        var dir: SIMD3<Float>
+        var len: Float
+        var selected: Bool
+      }
+      var segs: [BoneSeg] = []
+      segs.reserveCapacity(count)
+      for i in 0..<count {
+        let o = i * 7
+        let headB = SIMD3(packed[o], packed[o + 1], packed[o + 2])
+        let tailB = SIMD3(packed[o + 3], packed[o + 4], packed[o + 5])
+        let selected = packed[o + 6] > 0.5
+        let head = blenderToRealityKitCoord(headB)
+        let tail = blenderToRealityKitCoord(tailB)
+        let dir = tail - head
+        let len = simd_length(dir)
+        guard len >= 0.01, len <= 2.5,
+              head.x.isFinite, head.y.isFinite, head.z.isFinite,
+              tail.x.isFinite, tail.y.isFinite, tail.z.isFinite
+        else { continue }
+        segs.append(
+          BoneSeg(mid: (head + tail) * 0.5, dir: dir / len, len: len, selected: selected))
+      }
+
+      while boneEntities.count < segs.count {
+        let bone = ModelEntity(
+          mesh: .generateCylinder(height: 1.0, radius: 0.007),
+          materials: [Self.makeBoneMaterial(selected: false)])
+        /* Never participate in gaze / pinch hit-testing (Hand UI must win). */
+        bone.components.remove(CollisionComponent.self)
+        bone.components.remove(InputTargetComponent.self)
+        bone.components.set(OpacityComponent(opacity: 0.45))
+        root.addChild(bone)
+        boneEntities.append(bone)
+      }
+      while boneEntities.count > segs.count {
+        boneEntities.removeLast().removeFromParent()
+      }
+
+      for (i, seg) in segs.enumerated() {
+        let entity = boneEntities[i]
+        entity.position = seg.mid
+        entity.scale = SIMD3(1, seg.len, 1)
+        let up = SIMD3<Float>(0, 1, 0)
+        if abs(simd_dot(seg.dir, up)) < 0.999 {
+          entity.orientation = simd_quatf(from: up, to: seg.dir)
+        }
+        else {
+          entity.orientation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        }
+        entity.model?.materials = [Self.makeBoneMaterial(selected: seg.selected)]
+        entity.components.set(OpacityComponent(opacity: seg.selected ? 0.7 : 0.4))
+        entity.components.remove(CollisionComponent.self)
+        entity.components.remove(InputTargetComponent.self)
+      }
+    }
+
+    private static func makeBoneMaterial(selected: Bool) -> UnlitMaterial {
+      let color: UIColor = selected ?
+        .systemPink.withAlphaComponent(0.55) : .cyan.withAlphaComponent(0.4)
+      var mat = UnlitMaterial(color: color)
+      mat.color = .init(tint: color)
+      mat.blending = .transparent(opacity: .init(floatLiteral: selected ? 0.55 : 0.4))
+      return mat
+    }
+  }
+
   @MainActor
   private final class BlenderImmersiveObjectSync: ObservableObject {
     /** Shared placement root (USD scene + Muse tip share this frame). */
@@ -82,12 +254,17 @@ import simd
       }
 
       guard !isDragging, let activeEntity else { return }
-      let delta = blenderLocation - blenderBaseLocation
-      activeEntity.position =
-        entityBasePosition
-        + xAxisInParent * delta.x
-        + yAxisInParent * delta.y
-        + verticalAxisInParent * delta.z
+      /* Absolute world placement — avoids loc/parent drift that swapped Y/Z feel.
+       * Blender world (x,y,z) → RK (x,z,-y), then into the USD entity parent. */
+      let rkWorld = BlenderImmersiveCoords.blenderToRealityKit(blenderLocation)
+      if let parent = activeEntity.parent, let worldRoot {
+        activeEntity.position = parent.convert(position: rkWorld, from: worldRoot)
+      }
+      else {
+        activeEntity.position = rkWorld
+      }
+      blenderBaseLocation = blenderLocation
+      entityBasePosition = activeEntity.position
     }
 
     func dragParent(for hitEntity: Entity) -> Entity? {
@@ -230,55 +407,114 @@ import simd
     @State private var handMenuStrength = BlenderImmersiveState.shared.handMenuStrength
     @State private var handMenuRadius = BlenderImmersiveState.shared.handMenuRadius
     @State private var handMenuBrushLabel = BlenderImmersiveState.shared.handMenuBrushLabel
-    /** Float above left hand — Muse is typically held in the right hand.
-     * `.aboveHand` stays clear of the palm; Billboard keeps the panel facing the user
-     * so eye+pinch selection works regardless of wrist tilt. */
-    @State private var leftHandAnchor: Entity = AnchorEntity(
-      .hand(.left, location: .aboveHand), trackingMode: .continuous)
+    @State private var handMenuDyntopo = BlenderImmersiveState.shared.handMenuDyntopo
+    /** Left hand, palm-right side — Muse is typically in the right hand.
+     * Billboard keeps the panel facing the user for eye+pinch. */
+    @State private var handMenuAnchor: Entity = AnchorEntity(
+      .hand(.left, location: .palm), trackingMode: .continuous)
     @State private var handMenuConfigured = false
     @StateObject private var objectSync = BlenderImmersiveObjectSync()
+    @StateObject private var boneOverlay = BlenderImmersiveBoneOverlay()
+    @StateObject private var shaderOverlay = BlenderImmersiveShaderOverlay()
     @StateObject private var musePen = BlenderImmersiveMusePenController()
+    @StateObject private var handPen = BlenderImmersiveHandPenController()
+    @StateObject private var visionPlatform = BlenderVisionOSPlatformPublisher()
+    @StateObject private var sharedAnchor = BlenderImmersiveSharedAnchorController()
+    @StateObject private var viewerPose = BlenderImmersiveViewerPoseTracker()
+    @State private var bonePacked = BlenderImmersiveState.shared.bonePacked
+    @State private var boneCount = BlenderImmersiveState.shared.boneCount
+    @State private var shaderSpaceEnabled = BlenderImmersiveState.shared.shaderSpaceEnabled
+    @State private var shaderMaterialName = BlenderImmersiveState.shared.shaderMaterialName
+    @State private var shaderNodePacked = BlenderImmersiveState.shared.shaderNodePacked
+    @State private var shaderNodeCount = BlenderImmersiveState.shared.shaderNodeCount
+    @State private var shaderLinkPacked = BlenderImmersiveState.shared.shaderLinkPacked
+    @State private var shaderLinkCount = BlenderImmersiveState.shared.shaderLinkCount
+    @State private var shaderNodeNames = BlenderImmersiveState.shared.shaderNodeNames
+    @State private var shaderTypeNames = BlenderImmersiveState.shared.shaderTypeNames
+    @State private var shaderSockTypes = BlenderImmersiveState.shared.shaderSockTypes
+    @State private var shaderSockNames = BlenderImmersiveState.shared.shaderSockNames
+    @State private var useHandAsPen = BlenderImmersiveState.shared.useHandAsPen
     @State private var remotePresenceRoot = Entity()
+    @State private var sceneContainer = Entity()
+    @State private var immersiveWorldRoot: Entity?
 
     public init() {}
 
     private func configureHandMenuEntity(_ menuEntity: Entity) {
-      if menuEntity.parent != leftHandAnchor {
-        leftHandAnchor.addChild(menuEntity)
+      if menuEntity.parent != handMenuAnchor {
+        handMenuAnchor.addChild(menuEntity)
       }
       /* Do not force a fixed Euler tilt — that left the panel edge-on / covering the hand. */
       menuEntity.orientation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
       menuEntity.components.set(BillboardComponent())
-      menuEntity.position = SIMD3(0, 0.04, 0)
-      menuEntity.scale = SIMD3(repeating: 0.55)
+      /* Left palm: +X is toward the thumb / body-center (= right side of the left hand). */
+      menuEntity.position = SIMD3(0.18, 0.07, 0.05)
+      /* Keep near 1.0 for pinch hit targets. */
+      menuEntity.scale = SIMD3(repeating: 0.95)
       handMenuConfigured = true
     }
 
     public var body: some View {
       RealityView { content, attachments in
+          /* Scene container holds either free worldRoot or WorldAnchor→worldRoot. */
+          let container = Entity()
+          container.name = "BlenderImmersiveSceneContainer"
+          content.add(container)
+          sceneContainer = container
+
           /* One shared world root owns both Muse and the USD scene so tip
            * samples and mesh transforms share the same placement frame. */
           let worldRoot = Entity()
           worldRoot.name = "BlenderImmersiveWorld"
-          content.add(worldRoot)
+          container.addChild(worldRoot)
           worldRoot.position = SIMD3(
             placementOffset.x, placementOffset.y, -1.2 + placementOffset.z)
+          immersiveWorldRoot = worldRoot
 
           objectSync.bindWorldRoot(worldRoot)
+          boneOverlay.attach(to: worldRoot)
+          shaderOverlay.attach(to: worldRoot)
           musePen.attach(to: worldRoot)
+          handPen.attach(to: worldRoot)
+          visionPlatform.attach(to: worldRoot)
+          viewerPose.attach(content: &content, worldRoot: worldRoot)
+          BlenderImmersiveState.shared.sharedAnchor = sharedAnchor
           remotePresenceRoot.name = "BlenderRemotePresence"
           worldRoot.addChild(remotePresenceRoot)
-          content.add(leftHandAnchor)
+          content.add(handMenuAnchor)
+          sharedAnchor.attach(sceneContainer: container, worldRoot: worldRoot)
+          BlenderImmersiveMultiuserSession.shared.onRemoteSharedAnchor = { id, shared in
+            Task { @MainActor in
+              await sharedAnchor.adoptRemoteAnchor(idString: id, shared: shared)
+            }
+          }
           if let menuEntity = attachments.entity(for: "handMenu") {
             configureHandMenuEntity(menuEntity)
           }
+          await sharedAnchor.start()
           await requestLoadModel(worldRoot: worldRoot)
       } update: { _, attachments in
           BlenderImmersiveState.shared.updatePlacement(
             x: placementOffset.x, y: placementOffset.y, z: placementOffset.z)
-          objectSync.updatePlacement(offset: placementOffset)
+          /* When WorldAnchor owns the root, skip free placement offsets. */
+          if !sharedAnchor.hasWorldOrigin {
+            objectSync.updatePlacement(offset: placementOffset)
+          }
           objectSync.updateActiveObject(
             name: activeObjectName, blenderLocation: activeObjectLocation)
+          boneOverlay.update(
+            packed: bonePacked, count: boneCount, visible: handMenuMode == 4)
+          shaderOverlay.update(
+            materialName: shaderMaterialName,
+            nodePacked: shaderNodePacked,
+            nodeCount: shaderNodeCount,
+            names: shaderNodeNames,
+            typeNames: shaderTypeNames,
+            linkPacked: shaderLinkPacked,
+            linkCount: shaderLinkCount,
+            sockTypes: shaderSockTypes,
+            sockNames: shaderSockNames,
+            visible: shaderSpaceEnabled)
           /* Attach once — re-applying orientation every frame fought Billboard and
            * left the panel 90° off / covering the hand. */
           if !handMenuConfigured, let menuEntity = attachments.entity(for: "handMenu") {
@@ -288,11 +524,7 @@ import simd
         Attachment(id: "handMenu") {
           BlenderImmersiveHandMenuPanel(
             mode: $handMenuMode,
-            brushKind: $handMenuBrushKind,
-            strength: $handMenuStrength,
-            radius: $handMenuRadius,
-            brushLabel: handMenuBrushLabel,
-            compact: true)
+            radius: $handMenuRadius)
         }
       }
       /* Stable id: do NOT include modelRevision — remaking the RealityView on
@@ -302,34 +534,26 @@ import simd
         DragGesture()
           .targetedToAnyEntity()
           .onChanged { value in
+            /* Material board nodes take priority while Mat overlay is interactive. */
+            if shaderSpaceEnabled && shaderOverlay.isInteractive {
+              let location = value.convert(
+                value.location3D, from: .local, to: shaderOverlay.graphRoot)
+              if shaderOverlay.dragChanged(hitEntity: value.entity, locationInRoot: location) {
+                return
+              }
+            }
+            /* Object Mode = view-only. Anim/Pose = bone grab only (no mesh drag). */
+            guard handMenuMode != 0 && handMenuMode != 4 else { return }
             guard let parent = objectSync.dragParent(for: value.entity) else { return }
             let location = value.convert(value.location3D, from: .local, to: parent)
             objectSync.dragChanged(hitEntity: value.entity, locationInParent: location)
           }
-          .onEnded { _ in
+          .onEnded { value in
+            if shaderSpaceEnabled && shaderOverlay.isInteractive {
+              shaderOverlay.dragEnded(hitEntity: value.entity)
+            }
             objectSync.dragEnded()
           })
-      .ornament(visibility: .automatic, attachmentAnchor: .scene(.bottom)) {
-        VStack(spacing: 12) {
-          Text(musePen.statusText)
-            .font(.caption)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .glassBackgroundEffect()
-          Text("左手の上にも同じメニュー")
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-          BlenderImmersiveHandMenuPanel(
-            mode: $handMenuMode,
-            brushKind: $handMenuBrushKind,
-            strength: $handMenuStrength,
-            radius: $handMenuRadius,
-            brushLabel: handMenuBrushLabel,
-            compact: false)
-          placementControls
-        }
-        .padding(.bottom, 28)
-      }
       .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveModelPathChanged)) {
         note in
         modelPath = note.object as? String
@@ -365,25 +589,96 @@ import simd
         handMenuStrength = BlenderImmersiveState.shared.handMenuStrength
         handMenuRadius = BlenderImmersiveState.shared.handMenuRadius
         handMenuBrushLabel = BlenderImmersiveState.shared.handMenuBrushLabel
+        handMenuDyntopo = BlenderImmersiveState.shared.handMenuDyntopo
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveBonesChanged)) { _ in
+        bonePacked = BlenderImmersiveState.shared.bonePacked
+        boneCount = BlenderImmersiveState.shared.boneCount
+        boneOverlay.update(
+          packed: bonePacked, count: boneCount, visible: handMenuMode == 4)
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveShaderGraphChanged)) {
+        _ in
+        shaderSpaceEnabled = BlenderImmersiveState.shared.shaderSpaceEnabled
+        shaderMaterialName = BlenderImmersiveState.shared.shaderMaterialName
+        shaderNodePacked = BlenderImmersiveState.shared.shaderNodePacked
+        shaderNodeCount = BlenderImmersiveState.shared.shaderNodeCount
+        shaderNodeNames = BlenderImmersiveState.shared.shaderNodeNames
+        shaderTypeNames = BlenderImmersiveState.shared.shaderTypeNames
+        shaderLinkPacked = BlenderImmersiveState.shared.shaderLinkPacked
+        shaderLinkCount = BlenderImmersiveState.shared.shaderLinkCount
+        shaderSockTypes = BlenderImmersiveState.shared.shaderSockTypes
+        shaderSockNames = BlenderImmersiveState.shared.shaderSockNames
+        shaderOverlay.setSpatialBoardWanted(BlenderImmersiveState.shared.spatialBoardWanted)
+        shaderOverlay.update(
+          materialName: shaderMaterialName,
+          nodePacked: shaderNodePacked,
+          nodeCount: shaderNodeCount,
+          names: shaderNodeNames,
+          typeNames: shaderTypeNames,
+          linkPacked: shaderLinkPacked,
+          linkCount: shaderLinkCount,
+          sockTypes: shaderSockTypes,
+          sockNames: shaderSockNames,
+          visible: shaderSpaceEnabled)
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveSpatialBoardChanged)) {
+        _ in
+        shaderOverlay.setSpatialBoardWanted(BlenderImmersiveState.shared.spatialBoardWanted)
+        shaderOverlay.update(
+          materialName: shaderMaterialName,
+          nodePacked: shaderNodePacked,
+          nodeCount: shaderNodeCount,
+          names: shaderNodeNames,
+          typeNames: shaderTypeNames,
+          linkPacked: shaderLinkPacked,
+          linkCount: shaderLinkCount,
+          sockTypes: shaderSockTypes,
+          sockNames: shaderSockNames,
+          visible: shaderSpaceEnabled)
       }
       .onReceive(
         NotificationCenter.default.publisher(for: .blenderImmersiveRemotePresenceChanged)
       ) { _ in
         refreshRemotePresence()
       }
+      .onReceive(NotificationCenter.default.publisher(for: .blenderImmersivePlacementChanged)) {
+        _ in
+        originX = BlenderImmersiveState.shared.placementX
+        originHeight = BlenderImmersiveState.shared.placementY
+        originDepth = BlenderImmersiveState.shared.placementZ
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveHandAsPenChanged)) {
+        _ in
+        useHandAsPen = BlenderImmersiveState.shared.useHandAsPen
+        handPen.refreshStatus()
+      }
       .onAppear {
         BlenderImmersiveState.shared.markActive(true)
+        BlenderImmersiveState.shared.sharedAnchor = sharedAnchor
         /* Immersive Space often pauses the 2D MTKView; keep Muse→View3D sync alive. */
         GHOST_IOS_immersive_muse_tick_set_enabled(true)
+        useHandAsPen = BlenderImmersiveState.shared.useHandAsPen
         modelRevision = BlenderImmersiveState.shared.modelRevision
         activeObjectName = BlenderImmersiveState.shared.activeObjectName ?? ""
         activeObjectLocation = SIMD3(
           BlenderImmersiveState.shared.activeObjectX,
           BlenderImmersiveState.shared.activeObjectY,
           BlenderImmersiveState.shared.activeObjectZ)
+        originX = BlenderImmersiveState.shared.placementX
+        originHeight = BlenderImmersiveState.shared.placementY
+        originDepth = BlenderImmersiveState.shared.placementZ
       }
       .onDisappear {
         musePen.detach()
+        handPen.detach()
+        visionPlatform.detach()
+        viewerPose.detach()
+        sharedAnchor.stop()
+        if BlenderImmersiveState.shared.sharedAnchor === sharedAnchor {
+          BlenderImmersiveState.shared.sharedAnchor = nil
+        }
+        BlenderImmersiveMultiuserSession.shared.onRemoteSharedAnchor = nil
         GHOST_IOS_immersive_muse_tick_set_enabled(false)
         BlenderImmersiveState.shared.markActive(false)
       }
@@ -391,7 +686,7 @@ import simd
 
     /** Blender → RealityKit local (inverse of MusePen conversion). */
     private func blenderToRealityKit(_ blender: SIMD3<Float>) -> SIMD3<Float> {
-      SIMD3(blender.x, blender.z, -blender.y)
+      BlenderImmersiveCoords.blenderToRealityKit(blender)
     }
 
     private func refreshRemotePresence() {
@@ -429,50 +724,6 @@ import simd
 
     private var placementOffset: SIMD3<Float> {
       SIMD3(originX, originHeight, originDepth)
-    }
-
-    private var placementControls: some View {
-      VStack(spacing: 10) {
-        HStack {
-          Label("モデルの原点", systemImage: "move.3d")
-            .font(.headline)
-          Spacer()
-          Button("床に戻す") {
-            originX = 0
-            originHeight = 0
-            originDepth = 0
-          }
-        }
-
-        placementSlider(
-          title: "左右", value: $originX, range: -3...3,
-          valueText: String(format: "%+.2f m", originX))
-        placementSlider(
-          title: "高さ", value: $originHeight, range: -1...3,
-          valueText: String(format: "%+.2f m", originHeight))
-        placementSlider(
-          title: "奥行き", value: $originDepth, range: -3...1,
-          valueText: String(format: "%+.2f m", originDepth))
-      }
-      .padding(18)
-      .frame(width: 460)
-      .glassBackgroundEffect()
-    }
-
-    private func placementSlider(
-      title: String,
-      value: Binding<Float>,
-      range: ClosedRange<Float>,
-      valueText: String
-    ) -> some View {
-      HStack(spacing: 12) {
-        Text(title)
-          .frame(width: 48, alignment: .leading)
-        Slider(value: value, in: range, step: 0.05)
-        Text(valueText)
-          .monospacedDigit()
-          .frame(width: 80, alignment: .trailing)
-      }
     }
 
     /**

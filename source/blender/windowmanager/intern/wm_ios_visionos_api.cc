@@ -1,0 +1,104 @@
+/* SPDX-FileCopyrightText: 2026 Blender Authors
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later */
+
+/**
+ * Shared Vision Pro platform state (hand tracking, …) for Python add-ons.
+ */
+
+#include "WM_ios_visionos_api.h"
+
+#include <cstring>
+#include <mutex>
+
+#if defined(WITH_APPLE_CROSSPLATFORM)
+#  define BLENDER_VISIONOS_HOST 1
+#else
+#  define BLENDER_VISIONOS_HOST 0
+#endif
+
+static std::mutex g_visionos_mutex;
+static BLENDER_VISIONOS_HandSnapshot g_hand_snap{};
+static bool g_hand_valid = false;
+static bool g_immersive_active = false;
+
+extern "C" int BLENDER_VISIONOS_available(void)
+{
+#if BLENDER_VISIONOS_HOST
+  return 1;
+#else
+  return 0;
+#endif
+}
+
+extern "C" uint64_t BLENDER_VISIONOS_capabilities(void)
+{
+  uint64_t caps = 0;
+#if BLENDER_VISIONOS_HOST
+  caps |= BLENDER_VISIONOS_CAP_HAND_TRACKING;
+  std::lock_guard lock(g_visionos_mutex);
+  if (g_immersive_active) {
+    caps |= BLENDER_VISIONOS_CAP_IMMERSIVE_ACTIVE;
+  }
+#endif
+  return caps;
+}
+
+extern "C" int BLENDER_VISIONOS_hand_snapshot(BLENDER_VISIONOS_HandSnapshot *out)
+{
+  if (out == nullptr) {
+    return 0;
+  }
+#if !BLENDER_VISIONOS_HOST
+  std::memset(out, 0, sizeof(*out));
+  out->struct_size = uint32_t(sizeof(*out));
+  out->api_version = BLENDER_VISIONOS_API_VERSION;
+  return 0;
+#else
+  std::lock_guard lock(g_visionos_mutex);
+  if (!g_hand_valid) {
+    std::memset(out, 0, sizeof(*out));
+    out->struct_size = uint32_t(sizeof(*out));
+    out->api_version = BLENDER_VISIONOS_API_VERSION;
+    out->immersive_active = g_immersive_active ? 1u : 0u;
+    return 0;
+  }
+  *out = g_hand_snap;
+  return 1;
+#endif
+}
+
+extern "C" void BLENDER_VISIONOS_hand_publish(const BLENDER_VISIONOS_HandSnapshot *in)
+{
+#if BLENDER_VISIONOS_HOST
+  if (in == nullptr) {
+    return;
+  }
+  std::lock_guard lock(g_visionos_mutex);
+  g_hand_snap = *in;
+  g_hand_snap.struct_size = uint32_t(sizeof(g_hand_snap));
+  if (g_hand_snap.api_version == 0) {
+    g_hand_snap.api_version = BLENDER_VISIONOS_API_VERSION;
+  }
+  g_hand_snap.immersive_active = g_immersive_active ? 1u : 0u;
+  g_hand_valid = true;
+#else
+  (void)in;
+#endif
+}
+
+extern "C" void BLENDER_VISIONOS_set_immersive_active(int active)
+{
+#if BLENDER_VISIONOS_HOST
+  std::lock_guard lock(g_visionos_mutex);
+  g_immersive_active = active != 0;
+  if (!g_immersive_active) {
+    g_hand_valid = false;
+    std::memset(&g_hand_snap, 0, sizeof(g_hand_snap));
+    g_hand_snap.struct_size = uint32_t(sizeof(g_hand_snap));
+    g_hand_snap.api_version = BLENDER_VISIONOS_API_VERSION;
+  }
+#else
+  (void)active;
+#endif
+}

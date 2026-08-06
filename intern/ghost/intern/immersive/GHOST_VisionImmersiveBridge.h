@@ -42,6 +42,47 @@ void GHOST_Vision_update_hand_menu(int mode,
                                    const char *brush_label,
                                    int brush_kind);
 
+/** Pose bone overlay: packed [hx,hy,hz,tx,ty,tz,selected] * count. */
+void GHOST_Vision_update_bones(int count, const float *packed);
+
+/**
+ * Shader node graph overlay (spatial Shading editor).
+ * node_packed: [x, y, kind, selected, in_count, out_count] * node_count
+ * link_packed: [from_node, from_out_idx, to_node, to_in_idx] * link_count
+ */
+void GHOST_Vision_update_shader_graph(const char *material_name,
+                                      int node_count,
+                                      const float *node_packed,
+                                      const char *node_names,
+                                      const char *type_names,
+                                      int link_count,
+                                      const int *link_packed,
+                                      int sock_count,
+                                      const int *sock_types,
+                                      const char *sock_names);
+
+void GHOST_Vision_update_shader_props(const char *node_name,
+                                      const char *type_idname,
+                                      int prop_count,
+                                      const float *prop_packed,
+                                      const char *prop_names);
+
+/** Anim timeline / keyframes / pose xform mode for hand menu. */
+void GHOST_Vision_update_anim_timeline(int frame,
+                                       int frame_start,
+                                       int frame_end,
+                                       int key_count,
+                                       const int *key_frames,
+                                       int xform_mode,
+                                       int target_mode,
+                                       const char *active_bone);
+
+/** Use right-hand pinch instead of Muse stylus. */
+void GHOST_Vision_set_use_hand_as_pen(bool enable);
+
+/** Toggle spatial shader-node overlay visibility. */
+void GHOST_Vision_set_shader_space_enabled(bool enable);
+
 /** Multi Vision Pro Immersive share (Multipeer). No-op when inactive. */
 bool GHOST_Vision_multiuser_host(const char *display_name);
 bool GHOST_Vision_multiuser_join(const char *display_name);

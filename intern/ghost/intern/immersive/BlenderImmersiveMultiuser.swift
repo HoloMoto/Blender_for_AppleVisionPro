@@ -69,7 +69,7 @@ public final class BlenderImmersiveMultiuserSession: NSObject {
   @objc public static let shared = BlenderImmersiveMultiuserSession()
 
   private static let serviceType = "blender-imu"
-  private static let protocolVersion = 1
+  private static let protocolVersion = 2
 
   private let syncQueue = DispatchQueue(label: "blender.immersive.multiuser")
   private var peerId: MCPeerID!
@@ -83,6 +83,12 @@ public final class BlenderImmersiveMultiuserSession: NSObject {
   @objc public private(set) var statusText = "Idle"
   @objc public private(set) var peerCount: Int = 0
   @objc public private(set) var localPeerUUID = UUID().uuidString
+  /** Last shared WorldAnchor UUID advertised by the host (empty if none). */
+  @objc public private(set) var sharedAnchorID = ""
+  @objc public private(set) var sharedAnchorIsARKitShared = false
+
+  /** Optional MainActor hook so Immersive can react to remote anchor messages. */
+  @MainActor public var onRemoteSharedAnchor: ((String, Bool) -> Void)?
 
   private var colorSeed: SIMD3<Float> = SIMD3(0.2, 0.7, 1.0)
   private var remotePresence: [String: BlenderImmersiveRemotePresence] = [:]
@@ -222,6 +228,28 @@ public final class BlenderImmersiveMultiuserSession: NSObject {
     #endif
   }
 
+  /** Host: broadcast WorldAnchor UUID so guests can adopt / align. */
+  @objc public func broadcastSharedAnchor(id: String, shared: Bool) {
+    #if os(visionOS)
+      syncQueue.async { [weak self] in
+        guard let self, self.isActive, self.isHost, let session = self.session else { return }
+        self.sharedAnchorID = id
+        self.sharedAnchorIsARKitShared = shared
+        let peers = session.connectedPeers
+        guard !peers.isEmpty else { return }
+        let payload: [String: Any] = [
+          "v": Self.protocolVersion,
+          "t": "anchor",
+          "uid": self.localPeerUUID,
+          "aid": id,
+          "shared": shared ? 1 : 0,
+        ]
+        self.sendJSON(payload, to: peers, reliable: true)
+        print("[multiuser] broadcast anchor id=\(id) shared=\(shared)")
+      }
+    #endif
+  }
+
   private func startSessionLocked() {
     session = MCSession(peer: peerId, securityIdentity: nil, encryptionPreference: .required)
     session?.delegate = self
@@ -242,6 +270,8 @@ public final class BlenderImmersiveMultiuserSession: NSObject {
     isActive = false
     isHost = false
     peerCount = 0
+    sharedAnchorID = ""
+    sharedAnchorIsARKitShared = false
     remotePresence.removeAll()
     NotificationCenter.default.post(name: .blenderImmersiveRemotePresenceChanged, object: nil)
   }
@@ -306,6 +336,17 @@ public final class BlenderImmersiveMultiuserSession: NSObject {
       DispatchQueue.main.async {
         NotificationCenter.default.post(
           name: .blenderImmersiveRemotePresenceChanged, object: nil)
+      }
+    case "anchor":
+      let aid = (obj["aid"] as? String) ?? ""
+      guard !aid.isEmpty else { return }
+      let shared = intValue(obj["shared"]) != 0
+      sharedAnchorID = aid
+      sharedAnchorIsARKitShared = shared
+      statusText = shared ? "Shared anchor received" : "Anchor ID received — align here"
+      publishChanged()
+      DispatchQueue.main.async {
+        BlenderImmersiveMultiuserSession.shared.onRemoteSharedAnchor?(aid, shared)
       }
     default:
       break
@@ -373,7 +414,17 @@ public final class BlenderImmersiveMultiuserSession: NSObject {
             self.isHost
             ? "Hosting (\(self.peerCount) peer)" : "Connected to \(peerID.displayName)"
           self.announceHello(to: [peerID])
-          /* Guest asks nothing; host will push USD on next Immersive refresh. */
+          /* Re-send WorldAnchor id to newly connected guests. */
+          if self.isHost, !self.sharedAnchorID.isEmpty {
+            let payload: [String: Any] = [
+              "v": Self.protocolVersion,
+              "t": "anchor",
+              "uid": self.localPeerUUID,
+              "aid": self.sharedAnchorID,
+              "shared": self.sharedAnchorIsARKitShared ? 1 : 0,
+            ]
+            self.sendJSON(payload, to: [peerID], reliable: true)
+          }
         case .connecting:
           self.statusText = "Connecting to \(peerID.displayName)…"
         case .notConnected:

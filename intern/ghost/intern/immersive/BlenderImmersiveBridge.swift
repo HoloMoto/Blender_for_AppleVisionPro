@@ -65,6 +65,107 @@ public final class BlenderImmersiveBridge: NSObject {
     #endif
   }
 
+  @objc(updateBones:count:)
+  public static func updateBones(_ packed: [NSNumber]?, count: Int32) {
+    #if os(visionOS)
+      DispatchQueue.main.async {
+        BlenderImmersiveState.shared.updateBones(packed: packed, count: Int(count))
+      }
+    #endif
+  }
+
+  @objc(
+    updateShaderGraphMaterial:nodePacked:nodeCount:nodeNames:typeNames:linkPacked:linkCount:sockTypes:sockCount:sockNames:
+  )
+  public static func updateShaderGraphMaterial(
+    _ materialName: String?,
+    nodePacked: [NSNumber]?,
+    nodeCount: Int32,
+    nodeNames: String?,
+    typeNames: String?,
+    linkPacked: [NSNumber]?,
+    linkCount: Int32,
+    sockTypes: [NSNumber]?,
+    sockCount: Int32,
+    sockNames: String?
+  ) {
+    #if os(visionOS)
+      DispatchQueue.main.async {
+        BlenderImmersiveState.shared.updateShaderGraph(
+          materialName: materialName,
+          nodePacked: nodePacked,
+          nodeCount: Int(nodeCount),
+          nodeNames: nodeNames,
+          typeNames: typeNames,
+          linkPacked: linkPacked,
+          linkCount: Int(linkCount),
+          sockTypes: sockTypes,
+          sockCount: Int(sockCount),
+          sockNames: sockNames)
+      }
+    #endif
+  }
+
+  @objc public static func setShaderSpaceEnabled(_ enable: Bool) {
+    #if os(visionOS)
+      DispatchQueue.main.async {
+        BlenderImmersiveState.shared.applyShaderSpaceEnabled(enable)
+      }
+    #endif
+  }
+
+  @objc(updateShaderProps:typeIdname:propCount:propPacked:propNames:)
+  public static func updateShaderProps(
+    _ name: String?,
+    typeIdname: String?,
+    propCount: Int32,
+    propPacked: [NSNumber]?,
+    propNames: String?
+  ) {
+    #if os(visionOS)
+      DispatchQueue.main.async {
+        BlenderImmersiveState.shared.updateShaderProps(
+          name: name,
+          typeIdname: typeIdname,
+          propCount: Int(propCount),
+          propPacked: propPacked,
+          propNames: propNames)
+      }
+    #endif
+  }
+
+  @objc(updateAnimTimelineFrame:frameStart:frameEnd:keyFrames:xformMode:targetMode:activeBone:)
+  public static func updateAnimTimelineFrame(
+    _ frame: Int32,
+    frameStart: Int32,
+    frameEnd: Int32,
+    keyFrames: [NSNumber]?,
+    xformMode: Int32,
+    targetMode: Int32,
+    activeBone: String?
+  ) {
+    #if os(visionOS)
+      DispatchQueue.main.async {
+        BlenderImmersiveState.shared.updateAnimTimeline(
+          frame: Int(frame),
+          frameStart: Int(frameStart),
+          frameEnd: Int(frameEnd),
+          keyFrames: keyFrames,
+          xformMode: Int(xformMode),
+          targetMode: Int(targetMode),
+          activeBone: activeBone)
+      }
+    #endif
+  }
+
+  @objc public static func setUseHandAsPen(_ enable: Bool) {
+    #if os(visionOS)
+      DispatchQueue.main.async {
+        BlenderImmersiveState.shared.applyUseHandAsPen(enable)
+      }
+    #endif
+  }
+
   @objc public static func multiuserHost(_ displayName: String?) -> Bool {
     #if os(visionOS)
       return BlenderImmersiveMultiuserSession.shared.hostSession(displayName: displayName)

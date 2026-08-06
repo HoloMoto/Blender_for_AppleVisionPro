@@ -1956,7 +1956,13 @@ GHOST_WindowIOS::GHOST_WindowIOS(GHOST_SystemIOS *system_ios,
                                  GHOST_WindowIOS *parent_window)
     : GHOST_Window(width, height, state, context_params, false), metal_view_(nil)
 {
+#if TARGET_OS_VISION
+  /* visionOS WindowGroup owns the volume size — fill the scene so a mismatched
+   * startup size does not leave a permanent black letterbox around GHOST. */
+  full_screen_ = true;
+#else
   full_screen_ = false;
+#endif
   system_ios_ = system_ios;
   /* Parent window will be the window that focus is returned to upon close. */
   parent_window_ = parent_window;

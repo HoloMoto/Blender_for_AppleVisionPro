@@ -5,6 +5,7 @@
 /**
  * SwiftUI application entry for visionOS.
  * Hosts the existing UIKit Blender UI and declares ImmersiveSpace for RealityKit.
+ * Studio panel opens as its own WindowGroup while Immersive Space is active.
  */
 
 import SwiftUI
@@ -32,10 +33,18 @@ import UIKit
     }
 
     var body: some Scene {
+      /* Main 2D/3D Blender viewport host — no studio ornament here. */
       WindowGroup {
         BlenderUIKitRootRepresentable()
           .ignoresSafeArea()
       }
+
+      /* Immersive-only studio panel — auto-opens with Immersive Space. */
+      WindowGroup(id: BlenderStudioPanelWindowID) {
+        BlenderImmersiveViewportPanel()
+      }
+      .defaultSize(width: 380, height: 520)
+      .windowResizability(.automatic)
 
       /* Immersive content stays lazy: the view body runs when the space opens,
        * not during the initial WindowGroup paint. */
@@ -130,10 +139,13 @@ import UIKit
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
   }
 
-  /// Hidden launcher that can call openImmersiveSpace / dismissImmersiveSpace.
+  /// Hidden launcher: Immersive Space + Immersive-only studio window.
   struct BlenderImmersiveLauncher: View {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+    @State private var studioOpened = false
 
     var body: some View {
       Color.clear
@@ -144,8 +156,14 @@ import UIKit
             switch result {
             case .opened:
               BlenderImmersiveState.shared.markActive(true)
+              if !studioOpened {
+                studioOpened = true
+                openWindow(id: BlenderStudioPanelWindowID)
+              }
             default:
               BlenderImmersiveState.shared.markActive(false)
+              studioOpened = false
+              dismissWindow(id: BlenderStudioPanelWindowID)
               print("[immersive] openImmersiveSpace failed: \(String(describing: result))")
             }
           }
@@ -154,7 +172,24 @@ import UIKit
           Task {
             await dismissImmersiveSpace()
             BlenderImmersiveState.shared.markActive(false)
+            studioOpened = false
+            dismissWindow(id: BlenderStudioPanelWindowID)
           }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveActiveChanged)) { _ in
+          if !BlenderImmersiveState.shared.isActive {
+            studioOpened = false
+            dismissWindow(id: BlenderStudioPanelWindowID)
+          }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .blenderOpenStudioPanel)) { _ in
+          guard BlenderImmersiveState.shared.isActive else { return }
+          studioOpened = true
+          openWindow(id: BlenderStudioPanelWindowID)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .blenderDismissStudioPanel)) { _ in
+          studioOpened = false
+          dismissWindow(id: BlenderStudioPanelWindowID)
         }
     }
   }

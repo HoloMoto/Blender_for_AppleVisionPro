@@ -38,6 +38,8 @@ set(SRC
   intern/wm_operator_type.cc
   intern/wm_operator_utils.cc
   intern/wm_operators.cc
+  intern/wm_ios_visionos_api.cc
+  WM_ios_visionos_api.h
   intern/wm_panel_type.cc
   intern/wm_platform.cc
   intern/wm_platform_support.cc
@@ -208,6 +210,25 @@ if(WITH_XR_OPENXR)
     xr/wm_xr.hh
     xr/intern/wm_xr_intern.hh
   )
+endif()
+
+# Immersive remesh (DualCon / Quadriflow) is compiled inside wm_operators.cc.
+# These defines are otherwise only set on modifiers/blenkernel, so remesh was a
+# silent no-op on visionOS (OpenVDB off).
+if(WITH_MOD_REMESH)
+  list(APPEND INC
+    ../../../intern/dualcon
+  )
+  list(APPEND LIB
+    bf_intern_dualcon
+  )
+  add_definitions(-DWITH_MOD_REMESH)
+endif()
+if(WITH_QUADRIFLOW)
+  add_definitions(-DWITH_QUADRIFLOW)
+endif()
+if(WITH_OPENVDB)
+  add_definitions(-DWITH_OPENVDB)
 endif()
 
 blender_add_lib_nolist(bf_windowmanager "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")

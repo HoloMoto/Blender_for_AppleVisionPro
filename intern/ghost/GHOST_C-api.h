@@ -166,6 +166,51 @@ extern void GHOST_IOS_immersive_update_hand_menu(int mode,
                                                  const char *brush_label,
                                                  int brush_kind);
 /**
+ * Publish pose bones for Immersive overlay.
+ * \param packed: [hx,hy,hz, tx,ty,tz, selected] * count (Blender world space).
+ */
+extern void GHOST_IOS_immersive_update_bones(int count, const float *packed);
+/**
+ * Publish material shader node graph for Immersive overlay.
+ * node_packed: [x, y, kind, selected, in_count, out_count] * node_count
+ * node_names / type_names: '|' separated
+ * link_packed: [from_node, from_out_idx, to_node, to_in_idx] * link_count
+ * sock_types / sock_names: sockets in node order (inputs then outputs)
+ */
+extern void GHOST_IOS_immersive_update_shader_graph(const char *material_name,
+                                                    int node_count,
+                                                    const float *node_packed,
+                                                    const char *node_names,
+                                                    const char *type_names,
+                                                    int link_count,
+                                                    const int *link_packed,
+                                                    int sock_count,
+                                                    const int *sock_types,
+                                                    const char *sock_names);
+/** Selected node typed properties: [type, linked, v0,v1,v2,v3, min, max] * prop_count */
+extern void GHOST_IOS_immersive_update_shader_props(const char *node_name,
+                                                    const char *type_idname,
+                                                    int prop_count,
+                                                    const float *prop_packed,
+                                                    const char *prop_names);
+/**
+ * Publish Anim timeline: current/start/end frame, keyframe list, pose xform mode,
+ * and active bone name.
+ */
+extern void GHOST_IOS_immersive_update_anim_timeline(int frame,
+                                                      int frame_start,
+                                                      int frame_end,
+                                                      int key_count,
+                                                      const int *key_frames,
+                                                      int xform_mode,
+                                                      int target_mode,
+                                                      const char *active_bone);
+/** Use right-hand pinch as Muse pen substitute in Immersive Space. */
+extern void GHOST_IOS_immersive_set_use_hand_as_pen(bool enable);
+extern bool GHOST_IOS_immersive_get_use_hand_as_pen(void);
+/** Toggle spatial shader-node overlay (visionOS). */
+extern void GHOST_IOS_immersive_set_shader_space_enabled(bool enable);
+/**
  * Inject a tablet-aware cursor move into the active GHOST iOS window.
  * Coordinates are Ghost screen/client space (UIKit Y-down, before WM flip).
  */

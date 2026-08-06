@@ -324,15 +324,17 @@ void WM_init(bContext *C, int argc, const char **argv)
   wmHomeFileRead_Params read_homefile_params{};
   read_homefile_params.use_data = true;
 #if defined(__APPLE__) && defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-  /* Same intent as #WITH_APPLE_CROSSPLATFORM but guaranteed for iOS targets even when that CMake
-   * flag is off (otherwise sandboxed startup.blend can win and yield a minimal layout). */
-  read_homefile_params.use_userdef = false;
-  read_homefile_params.use_factory_settings = true;
+  /* Same intent as #WITH_APPLE_CROSSPLATFORM. Load user preferences so enabled
+   * add-ons / script dirs persist across launches (Mac-like addon parity). */
+  read_homefile_params.use_userdef = true;
+  read_homefile_params.use_factory_settings = G.factory_startup;
 #elif defined(WITH_APPLE_CROSSPLATFORM)
-  /* iOS startup stability first: ignore user preferences during bootstrap.
-   * This avoids re-enabling add-ons/scripts that may not be fully bundled yet. */
-  read_homefile_params.use_userdef = false;
-  read_homefile_params.use_factory_settings = true;
+  /* visionOS / iOS: restore UserPref (enabled add-ons) like desktop Mac.
+   * Previously forced factory-only to avoid broken add-ons; that also wiped
+   * legitimate Mac-parity persistence. Hard platform limits remain for .so /
+   * subprocess, but pure-Python add-ons must survive restart. */
+  read_homefile_params.use_userdef = true;
+  read_homefile_params.use_factory_settings = G.factory_startup;
 #else
   read_homefile_params.use_userdef = true;
   read_homefile_params.use_factory_settings = G.factory_startup;

@@ -143,6 +143,93 @@ extern "C" void GHOST_IOS_immersive_update_hand_menu(const int mode,
   GHOST_Vision_update_hand_menu(mode, strength, radius, brush_label, brush_kind);
 }
 
+extern "C" void GHOST_IOS_immersive_update_bones(const int count, const float *packed)
+{
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return;
+  }
+  GHOST_Vision_update_bones(count, packed);
+}
+
+extern "C" void GHOST_IOS_immersive_update_shader_graph(const char *material_name,
+                                                          const int node_count,
+                                                          const float *node_packed,
+                                                          const char *node_names,
+                                                          const char *type_names,
+                                                          const int link_count,
+                                                          const int *link_packed,
+                                                          const int sock_count,
+                                                          const int *sock_types,
+                                                          const char *sock_names)
+{
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return;
+  }
+  GHOST_Vision_update_shader_graph(material_name,
+                                   node_count,
+                                   node_packed,
+                                   node_names,
+                                   type_names,
+                                   link_count,
+                                   link_packed,
+                                   sock_count,
+                                   sock_types,
+                                   sock_names);
+}
+
+extern "C" void GHOST_IOS_immersive_update_shader_props(const char *node_name,
+                                                          const char *type_idname,
+                                                          const int prop_count,
+                                                          const float *prop_packed,
+                                                          const char *prop_names)
+{
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return;
+  }
+  GHOST_Vision_update_shader_props(
+      node_name, type_idname, prop_count, prop_packed, prop_names);
+}
+
+extern "C" void GHOST_IOS_immersive_update_anim_timeline(const int frame,
+                                                           const int frame_start,
+                                                           const int frame_end,
+                                                           const int key_count,
+                                                           const int *key_frames,
+                                                           const int xform_mode,
+                                                           const int target_mode,
+                                                           const char *active_bone)
+{
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return;
+  }
+  GHOST_Vision_update_anim_timeline(frame,
+                                    frame_start,
+                                    frame_end,
+                                    key_count,
+                                    key_frames,
+                                    xform_mode,
+                                    target_mode,
+                                    active_bone);
+}
+
+static bool g_ios_use_hand_as_pen = false;
+
+extern "C" void GHOST_IOS_immersive_set_use_hand_as_pen(const bool enable)
+{
+  g_ios_use_hand_as_pen = enable;
+  GHOST_Vision_set_use_hand_as_pen(enable);
+}
+
+extern "C" bool GHOST_IOS_immersive_get_use_hand_as_pen(void)
+{
+  return g_ios_use_hand_as_pen;
+}
+
+extern "C" void GHOST_IOS_immersive_set_shader_space_enabled(const bool enable)
+{
+  GHOST_Vision_set_shader_space_enabled(enable);
+}
+
 static GHOST_TabletData ghost_ios_tablet_from_pressure(const float pressure)
 {
   GHOST_TabletData tablet = GHOST_TABLET_DATA_NONE;

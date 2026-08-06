@@ -10,7 +10,29 @@
 static inline CGRect ghost_ios_default_bounds(void)
 {
 #if TARGET_OS_VISION
-  /* UIScreen is unavailable on visionOS; SwiftUI WindowGroup owns the scene size. */
+  /* UIScreen is unavailable on visionOS; SwiftUI WindowGroup owns the scene size.
+   * Prefer the live WindowScene / host UIWindow bounds so startup matches the
+   * actual volume. Hardcoded 1280×720 left black margins when the scene was larger. */
+  for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+    if (![scene isKindOfClass:[UIWindowScene class]]) {
+      continue;
+    }
+    UIWindowScene *window_scene = (UIWindowScene *)scene;
+    if (window_scene.activationState != UISceneActivationStateForegroundActive &&
+        window_scene.activationState != UISceneActivationStateForegroundInactive)
+    {
+      continue;
+    }
+    const CGRect scene_bounds = window_scene.coordinateSpace.bounds;
+    if (scene_bounds.size.width > 1.0 && scene_bounds.size.height > 1.0) {
+      return scene_bounds;
+    }
+    for (UIWindow *window in window_scene.windows) {
+      if (window.bounds.size.width > 1.0 && window.bounds.size.height > 1.0) {
+        return window.bounds;
+      }
+    }
+  }
   return CGRectMake(0, 0, 1280, 720);
 #else
   return [UIScreen mainScreen].bounds;

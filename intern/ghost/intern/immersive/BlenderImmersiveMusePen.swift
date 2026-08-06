@@ -23,15 +23,6 @@ import UIKit
   private func WM_IOS_immersive_muse_sample(
     _ x: Float, _ y: Float, _ z: Float, _ pressure: Float, _ tipPressed: Int32)
 
-  @_silgen_name("WM_IOS_immersive_muse_cycle_brush")
-  private func WM_IOS_immersive_muse_cycle_brush()
-
-  @_silgen_name("WM_IOS_immersive_muse_toggle_inflate_direction")
-  private func WM_IOS_immersive_muse_toggle_inflate_direction()
-
-  @_silgen_name("WM_IOS_immersive_muse_toggle_vpaint_erase")
-  private func WM_IOS_immersive_muse_toggle_vpaint_erase()
-
   @MainActor
   final class BlenderImmersiveMusePenController: ObservableObject {
     @Published private(set) var isConnected = false
@@ -42,7 +33,6 @@ import UIKit
     @Published private(set) var tipPressure: Float = 0
 
     private var rootEntity: Entity?
-    private var trackingSession: SpatialTrackingSession?
     private var arSession = ARKitSession()
     /** Set immediately when a session start begins — prevents concurrent run() races. */
     private var sessionLifecycle: SessionLifecycle = .idle
@@ -53,12 +43,15 @@ import UIKit
     private var tipPressedByStylus: [ObjectIdentifier: Bool] = [:]
     private var primaryPressedByStylus: [ObjectIdentifier: Bool] = [:]
     private var secondaryPressedByStylus: [ObjectIdentifier: Bool] = [:]
+    private var primaryPressureByStylus: [ObjectIdentifier: Float] = [:]
+    private var secondaryPressureByStylus: [ObjectIdentifier: Float] = [:]
     private var discoveryTask: Task<Void, Never>?
     private var sampleTask: Task<Void, Never>?
     private var attachGeneration: UInt = 0
     private var lastLoggedTipDown = false
-    /** Tip press hysteresis — prevents stroke restart flicker. */
-    private var tipLatch = false
+    /** Counts inputStateAvailableHandler wakes (diagnostics). */
+    private var handlerWakeCount = 0
+    private var queuedStateCount = 0
 
     private enum SessionLifecycle {
       case idle
@@ -93,15 +86,13 @@ import UIKit
       tipPressedByStylus.removeAll()
       primaryPressedByStylus.removeAll()
       secondaryPressedByStylus.removeAll()
+      primaryPressureByStylus.removeAll()
+      secondaryPressureByStylus.removeAll()
       lastLoggedTipDown = false
-      tipLatch = false
+      handlerWakeCount = 0
+      queuedStateCount = 0
 
-      let session = trackingSession
-      trackingSession = nil
       sessionLifecycle = .idle
-      if let session {
-        Task { await session.stop() }
-      }
 
       /* Release any in-flight sculpt tip so Blender does not leave a stroke open. */
       WM_IOS_immersive_muse_sample(0, 0, 0, 0, 0)
@@ -176,8 +167,8 @@ import UIKit
 
     /**
      * Start SpatialTrackingSession exactly once after a Muse AnchorEntity exists.
-     * Concurrent callers must not call session.run() in parallel — that breaks
-     * ARKit accessory providers ("provider is not running" / dual sessions).
+     * Uses the shared Immersive session so HandPen can also enable .hand without
+     * racing a second SpatialTrackingSession.run().
      */
     private func startTrackingSessionOnce() async {
       guard sessionLifecycle == .idle else { return }
@@ -187,23 +178,17 @@ import UIKit
       let capabilities: Set<SpatialTrackingSession.Configuration.AnchorCapability> = [
         .world, .hand, .accessory,
       ]
-      let configuration = SpatialTrackingSession.Configuration(tracking: capabilities)
-      let session = SpatialTrackingSession()
-      print("[immersive] Muse: starting SpatialTrackingSession…")
-      if let unavailable = await session.run(configuration) {
-        print("[immersive] Muse SpatialTrackingSession unavailable: \(unavailable)")
-        if unavailable.anchor.contains(.accessory) {
-          statusText = "Muse: トラッキング不可（権限を確認）"
-          sessionLifecycle = .idle
-          await session.stop()
-          return
-        }
+      print("[immersive] Muse: ensuring SpatialTrackingSession…")
+      let ok = await BlenderImmersiveSpatialTracking.ensure(capabilities: capabilities)
+      if !ok {
+        statusText = "Muse: トラッキング不可（権限を確認）"
+        sessionLifecycle = .idle
+        return
       }
 
-      trackingSession = session
       sessionLifecycle = .running
       print(
-        "[immersive] Muse SpatialTrackingSession running caps=\(capabilities) anchors=\(cursorByStylus.count)"
+        "[immersive] Muse SpatialTrackingSession ready anchors=\(cursorByStylus.count)"
       )
       refreshStatus()
       startPoseSampling()
@@ -305,32 +290,131 @@ import UIKit
       let btnSummary = "tip=\(tipBtn) primary=\(primBtn) secondary=\(secBtn)"
       print("[immersive] Muse buttons: \(btnSummary)")
       BlenderIOSDiagnosticLog.bootSwiftOnly("muse buttons: \(btnSummary)")
+      BlenderIOSDiagnosticLog.bootSwiftOnly(
+        "muse: drain nextInputState each frame (Apple Drawing). Mid=air pressure.")
 
-      input.inputStateQueueDepth = 20
-      /* Drain nextInputState() synchronously in the handler. Deferring the drain
-       * to Task { @MainActor } can drop presses before they are applied. */
+      /* Default queue depth is 1 — buffer between ~90 Hz pose samples. */
+      input.inputStateQueueDepth = 30
+      /*
+       * Apple "Handling input events": optionally wake when states arrive; drain
+       * nextInputState() in the game/pose loop (see Drawing with a spatial stylus).
+       * Live-polling input.buttons stays at 0 on device — do not use that path.
+       */
       input.inputStateAvailableHandler = { [weak self] input in
-        var pressed = false
-        var pressure: Float = 0
-        var saw = false
-        while let state = input.nextInputState() {
-          saw = true
-          let draw = Self.drawState(
-            tip: state.buttons[.stylusTip],
-            primary: state.buttons[.stylusPrimaryButton],
-            secondary: state.buttons[.stylusSecondaryButton])
-          pressed = draw.pressed
-          pressure = draw.pressure
-        }
-        guard saw else { return }
         Task { @MainActor [weak self] in
           guard let self else { return }
-          self.tipPressureByStylus[key] = pressure
-          self.tipPressedByStylus[key] = pressed
-          self.logTipTransitionIfNeeded(pressed: pressed, pressure: pressure, source: "handler")
+          self.handlerWakeCount += 1
+          _ = self.drainAndApplyStylusInput(input, key: key, source: "handler")
         }
       }
-      print("[immersive] Muse: tip/primary/secondary handlers attached")
+      input.elementValueDidChangeHandler = { [weak self] input, _ in
+        Task { @MainActor [weak self] in
+          guard let self else { return }
+          /* Snapshot current physical values when an element changes. */
+          self.applyStylusSnapshot(Self.readStylusButtons(from: input), key: key, source: "element")
+        }
+      }
+      print("[immersive] Muse: nextInputState drain + element handler attached")
+      BlenderIOSDiagnosticLog.bootSwiftOnly("muse: nextInputState + element handlers ready")
+    }
+
+    /** Apple Drawing sample: pressure = max(tip, primary, secondary). */
+    private struct StylusButtonRead {
+      var tipDown = false
+      var tipP: Float = 0
+      var primDown = false
+      var primP: Float = 0
+      var secDown = false
+      var secP: Float = 0
+
+      var drawDown: Bool { tipDown || primDown || secDown }
+      var drawPressure: Float { max(tipP, primP, secP) }
+    }
+
+    private static func readStylusButtons(from input: any GCDevicePhysicalInput) -> StylusButtonRead {
+      var r = StylusButtonRead()
+      let tip = input.buttons[.stylusTip]
+      let prim = input.buttons[.stylusPrimaryButton]
+      let sec = input.buttons[.stylusSecondaryButton]
+      r.tipP = max(tip?.pressedInput.value ?? 0, tip?.forceInput?.value ?? 0)
+      r.primP = max(prim?.pressedInput.value ?? 0, prim?.forceInput?.value ?? 0)
+      r.secP = max(sec?.pressedInput.value ?? 0, sec?.forceInput?.value ?? 0)
+      r.tipDown = (tip?.pressedInput.isPressed ?? false) || r.tipP > 0.001
+      r.primDown = (prim?.pressedInput.isPressed ?? false) || r.primP > 0.02
+      r.secDown = (sec?.pressedInput.isPressed ?? false) || r.secP > 0.02
+      return r
+    }
+
+    private static func readStylusButtons(fromState state: any GCDevicePhysicalInputState)
+      -> StylusButtonRead
+    {
+      var r = StylusButtonRead()
+      let tip = state.buttons[.stylusTip]
+      let prim = state.buttons[.stylusPrimaryButton]
+      let sec = state.buttons[.stylusSecondaryButton]
+      r.tipP = max(tip?.pressedInput.value ?? 0, tip?.forceInput?.value ?? 0)
+      r.primP = max(prim?.pressedInput.value ?? 0, prim?.forceInput?.value ?? 0)
+      r.secP = max(sec?.pressedInput.value ?? 0, sec?.forceInput?.value ?? 0)
+      r.tipDown = (tip?.pressedInput.isPressed ?? false) || r.tipP > 0.001
+      r.primDown = (prim?.pressedInput.isPressed ?? false) || r.primP > 0.02
+      r.secDown = (sec?.pressedInput.isPressed ?? false) || r.secP > 0.02
+      return r
+    }
+
+    @discardableResult
+    private func drainAndApplyStylusInput(
+      _ input: any GCDevicePhysicalInput, key: ObjectIdentifier, source: String
+    ) -> Bool {
+      var last: StylusButtonRead?
+      var events = 0
+      while let state = input.nextInputState() {
+        events += 1
+        last = Self.readStylusButtons(fromState: state)
+      }
+      guard let read = last else { return false }
+      queuedStateCount += events
+      applyStylusSnapshot(read, key: key, source: "\(source):\(events)")
+      return true
+    }
+
+    private func applyStylusSnapshot(_ read: StylusButtonRead, key: ObjectIdentifier, source: String)
+    {
+      tipPressedByStylus[key] = read.tipDown
+      tipPressureByStylus[key] = read.tipP
+      primaryPressedByStylus[key] = read.primDown
+      primaryPressureByStylus[key] = read.primP
+      secondaryPressedByStylus[key] = read.secDown
+      secondaryPressureByStylus[key] = read.secP
+
+      let drawDown = read.drawDown
+      /* Prefer secondary for air drawing (Apple), then tip, then primary. */
+      let pressure: Float = {
+        if read.secP > 0.001 { return read.secP }
+        if read.tipP > 0.001 { return read.tipP }
+        if read.primDown { return max(read.primP, 0.75) }
+        return read.drawPressure
+      }()
+      let outP: Float = drawDown ? max(pressure, 0.15) : 0
+      let changed = drawDown != isTipDown || abs(outP - tipPressure) > 0.04
+      isTipDown = drawDown
+      tipPressure = outP
+      logTipTransitionIfNeeded(pressed: drawDown, pressure: tipPressure, source: source)
+
+      if changed || source.hasPrefix("handler") || source.hasPrefix("element") {
+        let msg = String(
+          format: "muse \(source) t=%d/%.3f p=%d/%.3f s=%d/%.3f draw=%d outP=%.2f",
+          read.tipDown ? 1 : 0,
+          read.tipP,
+          read.primDown ? 1 : 0,
+          read.primP,
+          read.secDown ? 1 : 0,
+          read.secP,
+          drawDown ? 1 : 0,
+          tipPressure)
+        print("[immersive] \(msg)")
+        BlenderIOSDiagnosticLog.bootSwiftOnly(msg)
+        refreshStatus()
+      }
     }
 
     private func disconnect(_ stylus: GCStylus) {
@@ -341,13 +425,23 @@ import UIKit
       stylusByKey.removeValue(forKey: key)
       tipPressureByStylus.removeValue(forKey: key)
       tipPressedByStylus.removeValue(forKey: key)
+      primaryPressedByStylus.removeValue(forKey: key)
+      secondaryPressedByStylus.removeValue(forKey: key)
+      primaryPressureByStylus.removeValue(forKey: key)
+      secondaryPressureByStylus.removeValue(forKey: key)
       if let input = stylus.input {
         input.inputStateAvailableHandler = nil
+        input.elementValueDidChangeHandler = nil
       }
     }
 
     private func refreshStatus() {
       isConnected = !cursorByStylus.isEmpty
+      /* Object Mode = Immersive view-only (no tip strokes). */
+      if BlenderImmersiveState.shared.handMenuMode == 0 {
+        statusText = isConnected ? "Muse: 閲覧専用（Obj）" : "Muse: 未接続（閲覧専用）"
+        return
+      }
       switch (isConnected, sessionLifecycle) {
       case (true, .running):
         let brush = BlenderImmersiveState.shared.handMenuBrushKind
@@ -361,10 +455,10 @@ import UIKit
         }
         if isTipDown {
           statusText = String(
-            format: "Muse: %@  筆圧 %.0f%%", brushName, tipPressure * 100)
+            format: "Muse: %@  描画中 筆圧 %.0f%%", brushName, tipPressure * 100)
         }
         else {
-          statusText = "Muse: \(brushName)  tip描画 / 前=切替 / 中=加減算"
+          statusText = "Muse: \(brushName)  中ボタン押し=筆圧描画 / 球が赤く膨らむ"
         }
       case (true, .starting):
         statusText = "Muse: トラッキング開始中…"
@@ -392,7 +486,7 @@ import UIKit
               let m = anchor.transformMatrix(relativeTo: root)
               let local = SIMD3<Float>(m.columns.3.x, m.columns.3.y, m.columns.3.z)
               /* Blender X = RK X, Blender Y = -RK Z, Blender Z = RK Y. */
-              blender = SIMD3(local.x, -local.z, local.y)
+              blender = BlenderImmersiveCoords.realityKitToBlender(local)
             }
             else {
               let m = anchor.transformMatrix(relativeTo: nil)
@@ -400,67 +494,71 @@ import UIKit
               blender = self.realityKitWorldToBlender(world)
             }
 
-            /* Prefer live button poll — handler cache alone was stuck at tip=0. */
-            let live: (tip: Bool, tipPressure: Float, primary: Bool, secondary: Bool)
-            if let stylus = self.stylusByKey[key] {
-              live = Self.buttonState(fromStylus: stylus, latch: &self.tipLatch)
-            }
-            else {
-              live = (
-                self.tipPressedByStylus[key] ?? false,
-                self.tipPressureByStylus[key] ?? 0,
-                self.primaryPressedByStylus[key] ?? false,
-                self.secondaryPressedByStylus[key] ?? false)
-            }
-
-            let wasPrimary = self.primaryPressedByStylus[key] ?? false
-            let wasSecondary = self.secondaryPressedByStylus[key] ?? false
-            /* Rising edges while tip is up: front cycles brush, middle toggles add/sub. */
-            if !live.tip {
-              if live.primary && !wasPrimary {
-                WM_IOS_immersive_muse_cycle_brush()
-                print("[immersive] Muse primary → cycle brush")
-              }
-              if live.secondary && !wasSecondary {
-                if BlenderImmersiveState.shared.handMenuMode == 3 {
-                  WM_IOS_immersive_muse_toggle_vpaint_erase()
-                  print("[immersive] Muse secondary → toggle vpaint erase")
-                }
-                else {
-                  WM_IOS_immersive_muse_toggle_inflate_direction()
-                  print("[immersive] Muse secondary → toggle inflate add/sub")
+            /*
+             * Drain nextInputState every pose tick (Apple Drawing sample).
+             * Do NOT live-poll input.buttons — those stay 0 on device.
+             */
+            if let stylus = self.stylusByKey[key], let input = stylus.input {
+              if !self.drainAndApplyStylusInput(input, key: key, source: "tick") {
+                /* Sync release / sticky values via capture when queue was empty. */
+                if ticks % 3 == 0 {
+                  self.applyStylusSnapshot(
+                    Self.readStylusButtons(fromState: input.capture()), key: key, source: "capture")
                 }
               }
             }
 
-            self.tipPressedByStylus[key] = live.tip
-            self.tipPressureByStylus[key] = live.tipPressure
-            self.primaryPressedByStylus[key] = live.primary
-            self.secondaryPressedByStylus[key] = live.secondary
-            self.isTipDown = live.tip
-            self.tipPressure = live.tipPressure
-            self.logTipTransitionIfNeeded(
-              pressed: live.tip, pressure: live.tipPressure, source: "poll")
+            let tipSensor = self.tipPressedByStylus[key] ?? false
+            let tipSensorP = self.tipPressureByStylus[key] ?? 0
+            let primary = self.primaryPressedByStylus[key] ?? false
+            let primP = self.primaryPressureByStylus[key] ?? 0
+            let secondary = self.secondaryPressedByStylus[key] ?? false
+            let secP = self.secondaryPressureByStylus[key] ?? 0
+            /* Object Mode is view-only — ignore tip / middle-button draw. */
+            let viewOnly = BlenderImmersiveState.shared.handMenuMode == 0
+            let drawDown = viewOnly ? false : self.isTipDown
+            let drawPressure = viewOnly ? Float(0) : self.tipPressure
+
+            self.updateTipVisual(on: anchor, tipDown: drawDown, rawPressure: drawPressure)
             if ticks % 6 == 0 {
               self.refreshStatus()
             }
+            if ticks % 45 == 0 {
+              let msg = String(
+                format:
+                  "muse raw t=%d/%.3f p=%d/%.3f s=%d/%.3f draw=%d outP=%.2f wake=%d q=%d",
+                tipSensor ? 1 : 0,
+                tipSensorP,
+                primary ? 1 : 0,
+                primP,
+                secondary ? 1 : 0,
+                secP,
+                drawDown ? 1 : 0,
+                drawPressure,
+                self.handlerWakeCount,
+                self.queuedStateCount)
+              print("[immersive] \(msg)")
+              BlenderIOSDiagnosticLog.bootSwiftOnly(msg)
+            }
 
-            let tipPressure = live.tip ? max(live.tipPressure, 0.2) : 0
-            WM_IOS_immersive_muse_sample(
-              blender.x, blender.y, blender.z, tipPressure, live.tip ? 1 : 0)
-            /* Multiuser: share tip presence only when a session is active. */
-            if BlenderImmersiveMultiuserSession.shared.isActive {
-              BlenderImmersiveMultiuserSession.shared.sendLocalPresence(
-                x: blender.x, y: blender.y, z: blender.z, tipDown: live.tip)
+            let tipPressure = drawDown ? max(drawPressure, 0.15) : 0
+            /* When hand-as-pen is on, HandPen owns the muse_sample pipe. */
+            if !BlenderImmersiveState.shared.useHandAsPen {
+              WM_IOS_immersive_muse_sample(
+                blender.x, blender.y, blender.z, tipPressure, drawDown ? 1 : 0)
+              if BlenderImmersiveMultiuserSession.shared.isActive {
+                BlenderImmersiveMultiuserSession.shared.sendLocalPresence(
+                  x: blender.x, y: blender.y, z: blender.z, tipDown: drawDown)
+              }
             }
 
             if ticks % 30 == 0 {
               print(
                 String(
                   format:
-                    "[immersive] Muse sample tracked=%@ tip=%@ p=%.2f blender=(%.3f, %.3f, %.3f)",
+                    "[immersive] Muse sample tracked=%@ draw=%@ p=%.2f blender=(%.3f, %.3f, %.3f)",
                   anchor.isAnchored ? "yes" : "no",
-                  live.tip ? "down" : "up",
+                  drawDown ? "down" : "up",
                   tipPressure,
                   blender.x,
                   blender.y,
@@ -484,65 +582,6 @@ import UIKit
       BlenderIOSDiagnosticLog.bootSwiftOnly(msg)
     }
 
-    /** Tip = sculpt. Front/middle buttons are used for brush switching, not draw.
-     * Hysteresis avoids tip flicker restarting the stroke every frame (which
-     * previously skipped Inflate forever via the first-frame early-return). */
-    private static func buttonState(fromStylus stylus: GCStylus, latch: inout Bool) -> (
-      tip: Bool, tipPressure: Float, primary: Bool, secondary: Bool
-    ) {
-      guard let buttons = stylus.input?.buttons else {
-        latch = false
-        return (false, 0, false, false)
-      }
-      let tip = buttons[.stylusTip]
-      let primary = buttons[.stylusPrimaryButton]
-      let secondary = buttons[.stylusSecondaryButton]
-      let tipP = max(tip?.pressedInput.value ?? 0, tip?.forceInput?.value ?? 0)
-      let primP = max(primary?.pressedInput.value ?? 0, primary?.forceInput?.value ?? 0)
-      let secP = max(secondary?.pressedInput.value ?? 0, secondary?.forceInput?.value ?? 0)
-      let pressed = tip?.pressedInput.isPressed ?? false
-      let enterThreshold: Float = 0.015
-      let exitThreshold: Float = 0.008
-      let tipDown: Bool
-      if latch {
-        tipDown = pressed || tipP > exitThreshold
-      }
-      else {
-        tipDown = pressed || tipP > enterThreshold
-      }
-      latch = tipDown
-      let primDown = (primary?.pressedInput.isPressed ?? false) || primP > 0.35
-      let secDown = (secondary?.pressedInput.isPressed ?? false) || secP > 0.02
-      return (tipDown, tipDown ? max(tipP, 0.2) : tipP, primDown, secDown)
-    }
-
-    private static func buttonState(fromStylus stylus: GCStylus) -> (
-      tip: Bool, tipPressure: Float, primary: Bool, secondary: Bool
-    ) {
-      var latch = false
-      return buttonState(fromStylus: stylus, latch: &latch)
-    }
-
-    private static func drawState(fromStylus stylus: GCStylus) -> (pressed: Bool, pressure: Float)
-    {
-      let s = buttonState(fromStylus: stylus)
-      return (s.tip, s.tipPressure)
-    }
-
-    private static func drawState(
-      tip: (any GCButtonElement)?,
-      primary: (any GCButtonElement)?,
-      secondary: (any GCButtonElement)?
-    ) -> (pressed: Bool, pressure: Float)
-    {
-      let tipP = max(tip?.pressedInput.value ?? 0, tip?.forceInput?.value ?? 0)
-      let tipDown = (tip?.pressedInput.isPressed ?? false) || tipP > 0.02
-      /* Primary/secondary no longer paint — tip only. */
-      _ = primary
-      _ = secondary
-      return (tipDown, tipDown ? max(tipP, 0.05) : tipP)
-    }
-
     private func realityKitWorldToBlender(_ world: SIMD3<Float>) -> SIMD3<Float> {
       /* Prefer converting into the shared immersive root (USD + Muse parent).
        * Falling back to placement subtraction keeps older sessions working. */
@@ -556,17 +595,21 @@ import UIKit
         local = world - root
       }
       /* Blender X = RK X, Blender Y = -RK Z, Blender Z = RK Y. */
-      return SIMD3(local.x, -local.z, local.y)
+      return BlenderImmersiveCoords.realityKitToBlender(local)
     }
 
     private func makeCursorVisual() -> Entity {
-      /* Large unlit tip so it stays obvious even if tracking is coarse. */
+      /* Pink tip sphere — scale/color update with pressure in updateTipVisual.
+       * Kept translucent so the hand / work surface stays visible underneath. */
       let tip = ModelEntity(
         mesh: .generateSphere(radius: 0.04),
         materials: [
-          UnlitMaterial(color: .systemPink)
+          Self.translucentTipMaterial(color: .systemPink, alpha: 0.28)
         ])
       tip.name = "MuseTip"
+      tip.scale = SIMD3(repeating: 0.6)
+      /* Faint overall — see-through cursor so fine detail work is not occluded. */
+      tip.components.set(OpacityComponent(opacity: 0.35))
 
       let rayLength: Float = 0.25
       let ray = ModelEntity(
@@ -581,6 +624,42 @@ import UIKit
       root.addChild(tip)
       root.addChild(ray)
       return root
+    }
+
+    /** Grow + redden the tip sphere with stylus force so pressure is obvious in Immersive. */
+    private func updateTipVisual(on anchor: Entity, tipDown: Bool, rawPressure: Float) {
+      guard let tip = anchor.findEntity(named: "MuseTip") as? ModelEntity else { return }
+      let p = tipDown ? max(0, min(1, rawPressure)) : 0
+      /* Idle ~0.6×; tip-down starts ~1.0× and grows to ~2.8× at full pressure. */
+      let scale: Float = tipDown ? (1.0 + p * 1.8) : 0.6
+      tip.scale = SIMD3(repeating: scale)
+      let color: UIColor
+      /* Keep the cursor faint so the hand stays visible; alpha stays low even at
+       * full pressure (opacity ramps only slightly with force). */
+      let alpha: CGFloat
+      if tipDown {
+        /* Soft pink → vivid red as pressure rises. */
+        color = UIColor(
+          red: CGFloat(1.0),
+          green: CGFloat(0.55 - p * 0.45),
+          blue: CGFloat(0.55 - p * 0.45),
+          alpha: 1.0)
+        alpha = CGFloat(0.30 + Double(p) * 0.25)
+      }
+      else {
+        color = UIColor.systemPink
+        alpha = 0.28
+      }
+      tip.model?.materials = [Self.translucentTipMaterial(color: color, alpha: Float(alpha))]
+      tip.components.set(OpacityComponent(opacity: Float(alpha)))
+    }
+
+    /** UnlitMaterial that actually blends (alpha color alone does not enable transparency). */
+    private static func translucentTipMaterial(color: UIColor, alpha: Float) -> UnlitMaterial {
+      var material = UnlitMaterial(color: color)
+      material.color = .init(tint: color.withAlphaComponent(CGFloat(alpha)))
+      material.blending = .transparent(opacity: .init(floatLiteral: alpha))
+      return material
     }
   }
 

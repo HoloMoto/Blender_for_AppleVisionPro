@@ -45,11 +45,35 @@ StringRefNull essentials_directory_path()
     return path;
   }
 
+#if defined(WITH_APPLE_CROSSPLATFORM)
+  auto assets_contain_sculpt_brushes = [](const char *assets_dir) -> bool {
+    if (assets_dir == nullptr || assets_dir[0] == '\0') {
+      return false;
+    }
+    char brush_blend[FILE_MAX];
+    BLI_path_join(brush_blend,
+                  sizeof(brush_blend),
+                  assets_dir,
+                  "brushes",
+                  "essentials_brushes-mesh_sculpt.blend");
+    return BLI_exists(brush_blend);
+  };
+#endif
+
   if (const std::optional<std::string> datafiles_path = BKE_appdir_folder_id(
           BLENDER_SYSTEM_DATAFILES, "assets"))
   {
+#if defined(WITH_APPLE_CROSSPLATFORM)
+    /* Reject paths that resolve but lack the sculpt essentials pack — otherwise
+     * Paint stays brush-less and Immersive Sculpt looks "broken". */
+    if (assets_contain_sculpt_brushes(datafiles_path->c_str())) {
+      path = *datafiles_path;
+      return path;
+    }
+#else
     path = *datafiles_path;
     return path;
+#endif
   }
 
 #if defined(WITH_APPLE_CROSSPLATFORM)
@@ -60,7 +84,7 @@ StringRefNull essentials_directory_path()
     char ver[16];
     SNPRINTF(ver, "%d.%d", BLENDER_VERSION / 100, BLENDER_VERSION % 100);
     BLI_path_join(candidate, sizeof(candidate), program_dir, "Assets", ver, "datafiles", "assets");
-    if (BLI_is_dir(candidate)) {
+    if (BLI_is_dir(candidate) && assets_contain_sculpt_brushes(candidate)) {
       path = candidate;
       return path;
     }

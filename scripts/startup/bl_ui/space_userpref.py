@@ -1616,6 +1616,33 @@ class USERPREF_PT_file_paths_script_directories(FilePathsPanel, Panel):
             row.operator("preferences.script_directory_remove", text="", icon='X', emboss=False).index = i
 
 
+class USERPREF_PT_file_paths_ios_python_packages(FilePathsPanel, Panel):
+    bl_label = "Python Packages (visionOS)"
+
+    @classmethod
+    def poll(cls, _context):
+        import os
+        import sys
+        if os.environ.get("BLENDER_USER_SITE_PACKAGES"):
+            return True
+        py = os.environ.get("BLENDER_SYSTEM_PYTHON", "")
+        return ("Assets" in py.replace("\\", "/")) or sys.platform == "ios"
+
+    def draw(self, _context):
+        import blender_ios_pip
+        layout = self.layout
+        layout.use_property_split = False
+        site = str(blender_ios_pip.site_packages_dir())
+        layout.label(text="In-process pip → Documents (Mac-like deps for pure-Python add-ons)")
+        box = layout.box()
+        box.label(text=site, icon='FILE_FOLDER')
+        row = layout.row(align=True)
+        row.operator("preferences.ios_pip_install", text="Install Package…", icon='IMPORT')
+        row.operator("preferences.ios_pip_uninstall", text="Uninstall…", icon='X')
+        layout.label(text="Pure-Python OK. Native .so (numpy…) needs visionOS builds / no-deps.")
+        layout.label(text="Console: import blender_ios_pip as p; p.status()", icon='CONSOLE')
+
+
 class USERPREF_PT_file_paths_render(FilePathsPanel, Panel):
     bl_label = "Render"
     bl_parent_id = "USERPREF_PT_file_paths_data"
@@ -3026,6 +3053,7 @@ classes = (
     USERPREF_PT_file_paths_render,
     USERPREF_PT_file_paths_asset_libraries,
     USERPREF_PT_file_paths_script_directories,
+    USERPREF_PT_file_paths_ios_python_packages,
     USERPREF_PT_file_paths_applications,
     USERPREF_PT_text_editor,
     USERPREF_PT_text_editor_presets,
