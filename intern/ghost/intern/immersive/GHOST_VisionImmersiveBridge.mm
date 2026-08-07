@@ -9,6 +9,7 @@
 #include "GHOST_VisionImmersiveBridge.h"
 
 #include <TargetConditionals.h>
+#include <cstring>
 
 #if defined(WITH_VISIONOS_IMMERSIVE_SPACE) && TARGET_OS_VISION
 
@@ -20,6 +21,9 @@
 + (BOOL)dismissImmersiveSpace;
 + (BOOL)isActive;
 + (void)updateActiveObject:(NSString *)name x:(float)x y:(float)y z:(float)z;
++ (void)updateObjectTransformsNames:(NSArray<NSString *> *)names
+                               count:(int)count
+                                 xyz:(NSArray<NSNumber *> *)xyz;
 + (void)updateHandMenuMode:(int)mode
                   strength:(float)strength
                     radius:(float)radius
@@ -107,6 +111,37 @@ void GHOST_Vision_update_active_object(const char *object_name,
   @autoreleasepool {
     NSString *name = (object_name != nullptr) ? [NSString stringWithUTF8String:object_name] : nil;
     [BlenderImmersiveBridge updateActiveObject:name x:blender_x y:blender_y z:blender_z];
+  }
+}
+
+void GHOST_Vision_update_object_transforms(const int count,
+                                           const char *names_blob,
+                                           const int names_blob_len,
+                                           const float *xyz)
+{
+  @autoreleasepool {
+    const int n = MAX(0, count);
+    NSMutableArray<NSString *> *names = [NSMutableArray arrayWithCapacity:n];
+    if (names_blob != nullptr && names_blob_len > 0 && n > 0) {
+      int offset = 0;
+      for (int i = 0; i < n && offset < names_blob_len; i++) {
+        const char *start = names_blob + offset;
+        const size_t max_len = size_t(names_blob_len - offset);
+        const size_t len = strnlen(start, max_len);
+        NSString *name = [[NSString alloc] initWithBytes:start
+                                                    length:len
+                                                  encoding:NSUTF8StringEncoding];
+        [names addObject:name ?: @""];
+        offset += int(len) + 1;
+      }
+    }
+    NSMutableArray<NSNumber *> *xyzArr = [NSMutableArray arrayWithCapacity:n * 3];
+    if (xyz != nullptr && n > 0) {
+      for (int i = 0; i < n * 3; i++) {
+        [xyzArr addObject:@(xyz[i])];
+      }
+    }
+    [BlenderImmersiveBridge updateObjectTransformsNames:names count:n xyz:xyzArr];
   }
 }
 
@@ -355,6 +390,13 @@ void GHOST_Vision_update_active_object(const char * /*object_name*/,
                                        const float /*blender_x*/,
                                        const float /*blender_y*/,
                                        const float /*blender_z*/)
+{
+}
+
+void GHOST_Vision_update_object_transforms(const int /*count*/,
+                                           const char * /*names_blob*/,
+                                           const int /*names_blob_len*/,
+                                           const float * /*xyz*/)
 {
 }
 

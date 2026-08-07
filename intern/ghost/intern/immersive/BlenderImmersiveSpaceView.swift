@@ -267,6 +267,29 @@ import simd
       entityBasePosition = activeEntity.position
     }
 
+    /**
+     * Lightweight multi-object transform sync (no USD, no collision rebuild).
+     * Finds existing USD entities by Blender name and updates position only —
+     * used for Object Mode demos (Tetris etc.) where full USD reload is too slow.
+     */
+    func updateObjectTransforms(names: [String], locations: [SIMD3<Float>]) {
+      guard let rootEntity, let worldRoot else { return }
+      let n = min(names.count, locations.count)
+      guard n > 0 else { return }
+      for i in 0..<n {
+        let name = names[i]
+        guard !name.isEmpty, name != activeObjectName else { continue }
+        guard let entity = findEntity(named: name, in: rootEntity) else { continue }
+        let rkWorld = BlenderImmersiveCoords.blenderToRealityKit(locations[i])
+        if let parent = entity.parent {
+          entity.position = parent.convert(position: rkWorld, from: worldRoot)
+        }
+        else {
+          entity.position = rkWorld
+        }
+      }
+    }
+
     func dragParent(for hitEntity: Entity) -> Entity? {
       guard let activeEntity, belongsToActiveEntity(hitEntity) else { return nil }
       return activeEntity.parent
@@ -393,6 +416,8 @@ import simd
       BlenderImmersiveState.shared.activeObjectX,
       BlenderImmersiveState.shared.activeObjectY,
       BlenderImmersiveState.shared.activeObjectZ)
+    @State private var objectTransformNames = BlenderImmersiveState.shared.objectTransformNames
+    @State private var objectTransformXYZ = BlenderImmersiveState.shared.objectTransformXYZ
     @State private var originX: Float = 0
     @State private var originHeight: Float = 0
     @State private var originDepth: Float = 0
@@ -419,6 +444,7 @@ import simd
     @StateObject private var musePen = BlenderImmersiveMusePenController()
     @StateObject private var handPen = BlenderImmersiveHandPenController()
     @StateObject private var visionPlatform = BlenderVisionOSPlatformPublisher()
+    @StateObject private var worldMesh = BlenderVisionOSWorldMesh()
     @StateObject private var sharedAnchor = BlenderImmersiveSharedAnchorController()
     @StateObject private var viewerPose = BlenderImmersiveViewerPoseTracker()
     @State private var bonePacked = BlenderImmersiveState.shared.bonePacked
@@ -477,6 +503,7 @@ import simd
           musePen.attach(to: worldRoot)
           handPen.attach(to: worldRoot)
           visionPlatform.attach(to: worldRoot)
+          worldMesh.start(worldRoot: worldRoot)
           viewerPose.attach(content: &content, worldRoot: worldRoot)
           BlenderImmersiveState.shared.sharedAnchor = sharedAnchor
           remotePresenceRoot.name = "BlenderRemotePresence"
@@ -502,6 +529,10 @@ import simd
           }
           objectSync.updateActiveObject(
             name: activeObjectName, blenderLocation: activeObjectLocation)
+          if !objectTransformNames.isEmpty {
+            objectSync.updateObjectTransforms(
+              names: objectTransformNames, locations: objectTransformLocations)
+          }
           boneOverlay.update(
             packed: bonePacked, count: boneCount, visible: handMenuMode == 4)
           shaderOverlay.update(
@@ -582,6 +613,12 @@ import simd
         activeObjectName = name
         activeObjectLocation = SIMD3(
           xNumber.floatValue, yNumber.floatValue, zNumber.floatValue)
+      }
+      .onReceive(
+        NotificationCenter.default.publisher(for: .blenderImmersiveObjectTransformsChanged)
+      ) { _ in
+        objectTransformNames = BlenderImmersiveState.shared.objectTransformNames
+        objectTransformXYZ = BlenderImmersiveState.shared.objectTransformXYZ
       }
       .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveHandMenuChanged)) { _ in
         handMenuMode = BlenderImmersiveState.shared.handMenuMode
@@ -665,6 +702,8 @@ import simd
           BlenderImmersiveState.shared.activeObjectX,
           BlenderImmersiveState.shared.activeObjectY,
           BlenderImmersiveState.shared.activeObjectZ)
+        objectTransformNames = BlenderImmersiveState.shared.objectTransformNames
+        objectTransformXYZ = BlenderImmersiveState.shared.objectTransformXYZ
         originX = BlenderImmersiveState.shared.placementX
         originHeight = BlenderImmersiveState.shared.placementY
         originDepth = BlenderImmersiveState.shared.placementZ
@@ -673,6 +712,7 @@ import simd
         musePen.detach()
         handPen.detach()
         visionPlatform.detach()
+        worldMesh.stop()
         viewerPose.detach()
         sharedAnchor.stop()
         if BlenderImmersiveState.shared.sharedAnchor === sharedAnchor {
@@ -724,6 +764,19 @@ import simd
 
     private var placementOffset: SIMD3<Float> {
       SIMD3(originX, originHeight, originDepth)
+    }
+
+    /** Flat [x0,y0,z0, x1,y1,z1, ...] → [SIMD3] for `objectSync.updateObjectTransforms`. */
+    private var objectTransformLocations: [SIMD3<Float>] {
+      var result: [SIMD3<Float>] = []
+      result.reserveCapacity(objectTransformXYZ.count / 3)
+      var i = 0
+      while i + 2 < objectTransformXYZ.count {
+        result.append(
+          SIMD3(objectTransformXYZ[i], objectTransformXYZ[i + 1], objectTransformXYZ[i + 2]))
+        i += 3
+      }
+      return result
     }
 
     /**

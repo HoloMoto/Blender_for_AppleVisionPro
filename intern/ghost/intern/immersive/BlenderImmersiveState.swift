@@ -20,6 +20,8 @@ public extension Notification.Name {
     "blender.immersiveModelPathChanged")
   static let blenderImmersiveActiveObjectChanged = Notification.Name(
     "blender.immersiveActiveObjectChanged")
+  static let blenderImmersiveObjectTransformsChanged = Notification.Name(
+    "blender.immersiveObjectTransformsChanged")
   static let blenderImmersiveHandMenuChanged = Notification.Name(
     "blender.immersiveHandMenuChanged")
   static let blenderImmersiveHandAsPenChanged = Notification.Name(
@@ -52,6 +54,9 @@ public extension Notification.Name {
   @objc public private(set) var activeObjectX: Float = 0
   @objc public private(set) var activeObjectY: Float = 0
   @objc public private(set) var activeObjectZ: Float = 0
+  /** Lightweight multi-object transform sync (no USD): parallel names / xyz (Blender world). */
+  @objc public private(set) var objectTransformNames: [String] = []
+  @objc public private(set) var objectTransformXYZ: [Float] = []
   /** Immersive scene placement offset (meters). Used by Muse → Blender projection. */
   @objc public private(set) var placementX: Float = 0
   @objc public private(set) var placementY: Float = 0
@@ -159,6 +164,24 @@ public extension Notification.Name {
       name: .blenderImmersiveActiveObjectChanged,
       object: nil,
       userInfo: ["name": name ?? "", "x": x, "y": y, "z": z])
+  }
+
+  @objc public func updateObjectTransforms(names: [String]?, count: Int, xyz: [NSNumber]?) {
+    let n = max(0, count)
+    let nextNames = Array((names ?? []).prefix(n))
+    let nextXYZ: [Float]
+    if let xyz, n > 0 {
+      nextXYZ = xyz.prefix(n * 3).map { $0.floatValue }
+    }
+    else {
+      nextXYZ = []
+    }
+    if objectTransformNames == nextNames && objectTransformXYZ == nextXYZ {
+      return
+    }
+    objectTransformNames = nextNames
+    objectTransformXYZ = nextXYZ
+    NotificationCenter.default.post(name: .blenderImmersiveObjectTransformsChanged, object: nil)
   }
 
   @objc public func updateHandMenu(

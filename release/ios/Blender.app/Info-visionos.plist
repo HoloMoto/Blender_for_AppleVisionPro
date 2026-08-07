@@ -42,7 +42,7 @@
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>91</string>
+	<string>92</string>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSAccessoryTrackingUsageDescription</key>
@@ -62,7 +62,7 @@
 	<key>NSMainCameraUsageDescription</key>
 	<string>Blender uses the main camera for Reality Kit immersive AR and Muse accessory tracking.</string>
 	<key>NSWorldSensingUsageDescription</key>
-	<string>Blender uses world sensing to place 3D content in your space.</string>
+	<string>Blender uses world sensing for Immersive placement and to expose room mesh geometry to add-ons via blender_visionos.world_mesh.</string>
 	<key>UIApplicationPreferredDefaultSceneSessionRole</key>
 	<string>UIWindowSceneSessionRoleApplication</string>
 	<key>UIApplicationSceneManifest</key>

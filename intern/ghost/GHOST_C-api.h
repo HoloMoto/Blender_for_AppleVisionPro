@@ -159,6 +159,15 @@ extern void GHOST_IOS_immersive_reload_model(const char *usdz_path);
 /** Push the active Blender object's transform state to the RealityKit view. */
 extern void GHOST_IOS_immersive_update_active_object(
     const char *object_name, float blender_x, float blender_y, float blender_z);
+/**
+ * Lightweight multi-object transform sync (no USD). Push world locations for
+ * many objects in one call so RealityKit entities track Object Mode moves.
+ * \param names_blob: \a count concatenated C-strings (each NUL-terminated).
+ * \param names_blob_len: total byte length of \a names_blob (including NULs).
+ * \param xyz: \a count * 3 floats, Blender world space.
+ */
+extern void GHOST_IOS_immersive_update_object_transforms(
+    int count, const char *names_blob, int names_blob_len, const float *xyz);
 /** Push hand-menu state (mode/strength/radius/brush) to the Immersive UI. */
 extern void GHOST_IOS_immersive_update_hand_menu(int mode,
                                                  float strength,

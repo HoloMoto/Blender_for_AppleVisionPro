@@ -8811,55 +8811,6 @@ static uint64_t wm_ios_immersive_scene_mesh_fingerprint(bContext *C)
   return h;
 }
 
-/** Quantized world transform hash for optional Object-Mode Immersive refresh. */
-static uint64_t wm_ios_immersive_scene_transform_fingerprint(bContext *C)
-{
-  Scene *scene = CTX_data_scene(C);
-  ViewLayer *view_layer = CTX_data_view_layer(C);
-  if (scene == nullptr || view_layer == nullptr) {
-    return 0;
-  }
-  BKE_view_layer_synced_ensure(scene, view_layer);
-
-  uint64_t h = 14695981039346656037ull;
-  auto mix_i = [&h](int v) {
-    h ^= uint64_t(v) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
-  };
-  auto mix_str = [&](const char *s) {
-    if (s == nullptr) {
-      return;
-    }
-    for (const unsigned char *p = reinterpret_cast<const unsigned char *>(s); *p; p++) {
-      h ^= uint64_t(*p);
-      h *= 1099511628211ull;
-    }
-  };
-
-  ListBase *bases = BKE_view_layer_object_bases_get(view_layer);
-  for (Base *base = static_cast<Base *>(bases->first); base != nullptr; base = base->next) {
-    Object *ob = base->object;
-    if (ob == nullptr || ob->type != OB_MESH) {
-      continue;
-    }
-    if ((base->flag & BASE_ENABLED_AND_MAYBE_VISIBLE_IN_VIEWPORT) == 0) {
-      continue;
-    }
-    mix_str(ob->id.name);
-    const float *wl = ob->object_to_world().location();
-    /* ~2 mm / ~0.5° quantization — absorbs float noise, still tracks play. */
-    mix_i(int(wl[0] * 500.0f));
-    mix_i(int(wl[1] * 500.0f));
-    mix_i(int(wl[2] * 500.0f));
-    mix_i(int(ob->rot[0] * 120.0f));
-    mix_i(int(ob->rot[1] * 120.0f));
-    mix_i(int(ob->rot[2] * 120.0f));
-    mix_i(int(ob->scale[0] * 100.0f));
-    mix_i(int(ob->scale[1] * 100.0f));
-    mix_i(int(ob->scale[2] * 100.0f));
-  }
-  return h;
-}
-
 static bool wm_ios_immersive_reload_usdz(bContext *C, Object *ob, const char *reason)
 {
   static uint64_t refresh_serial = 0;
@@ -8999,18 +8950,47 @@ static void wm_ios_immersive_sync_impl(bContext *C)
     g_wm_ios_muse_geometry_dirty = true;
   }
 
-  /* Optional: Object Mode transform changes → USD path (games demos, etc.). */
+  /* Lightweight Immersive transform bridge (no USD). When enabled, publish all
+   * visible mesh world locations so RealityKit entities track Object Mode moves
+   * without a full scene reload. Structure/geo changes still use USD. */
   if (g_wm_ios_sync_transforms_to_space) {
-    static uint64_t last_xform_fp = 0;
-    static bool xform_fp_init = false;
-    const uint64_t xform_fp = wm_ios_immersive_scene_transform_fingerprint(C);
-    if (!xform_fp_init) {
-      last_xform_fp = xform_fp;
-      xform_fp_init = true;
+    constexpr int kMaxXforms = 96;
+    char names_blob[kMaxXforms * 64];
+    float xyz[kMaxXforms * 3];
+    int names_len = 0;
+    int count = 0;
+    Scene *scene_xf = CTX_data_scene(C);
+    ViewLayer *view_layer_xf = CTX_data_view_layer(C);
+    if (scene_xf != nullptr && view_layer_xf != nullptr) {
+      BKE_view_layer_synced_ensure(scene_xf, view_layer_xf);
+      ListBase *bases = BKE_view_layer_object_bases_get(view_layer_xf);
+      for (Base *base = static_cast<Base *>(bases->first);
+           base != nullptr && count < kMaxXforms;
+           base = base->next)
+      {
+        Object *mob = base->object;
+        if (mob == nullptr || mob->type != OB_MESH) {
+          continue;
+        }
+        if ((base->flag & BASE_ENABLED_AND_MAYBE_VISIBLE_IN_VIEWPORT) == 0) {
+          continue;
+        }
+        const char *n = mob->id.name + 2;
+        const int nlen = int(std::strlen(n));
+        if (nlen <= 0 || names_len + nlen + 1 >= int(sizeof(names_blob))) {
+          break;
+        }
+        std::memcpy(names_blob + names_len, n, size_t(nlen + 1));
+        names_len += nlen + 1;
+        const float *wl = mob->object_to_world().location();
+        xyz[count * 3 + 0] = wl[0];
+        xyz[count * 3 + 1] = wl[1];
+        xyz[count * 3 + 2] = wl[2];
+        count++;
+      }
     }
-    else if (xform_fp != last_xform_fp) {
-      last_xform_fp = xform_fp;
-      g_wm_ios_muse_geometry_dirty = true;
+    if (count > 0) {
+      GHOST_IOS_immersive_update_object_transforms(count, names_blob, names_len, xyz);
     }
   }
 

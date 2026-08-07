@@ -131,6 +131,17 @@ extern "C" void GHOST_IOS_immersive_update_active_object(const char *object_name
   GHOST_Vision_update_active_object(object_name, blender_x, blender_y, blender_z);
 }
 
+extern "C" void GHOST_IOS_immersive_update_object_transforms(const int count,
+                                                              const char *names_blob,
+                                                              const int names_blob_len,
+                                                              const float *xyz)
+{
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return;
+  }
+  GHOST_Vision_update_object_transforms(count, names_blob, names_blob_len, xyz);
+}
+
 extern "C" void GHOST_IOS_immersive_update_hand_menu(const int mode,
                                                        const float strength,
                                                        const float radius,

@@ -110,10 +110,11 @@ class ImmersiveOptions(PropertyGroup):
         update=_update_mode,
     )
     sync_transforms_to_space: BoolProperty(
-        name="物体移動も空間へ反映",
+        name="物体移動も空間へ反映（軽量）",
         description=(
-            "複数オブジェクトの移動・拡大縮小も Immersive に送る"
-            "（テトリス等のデモ向け。重いので必要なときだけ）"
+            "複数オブジェクトの位置移動を Immersive に送る（軽量：USDなし / 位置のみ、"
+            "拡大縮小・回転は反映されません）。"
+            "テトリス等のデモ向け。形状・構成の変更は引き続き USD 再出力で反映されます"
         ),
         default=False,
         update=_update_sync_transforms,

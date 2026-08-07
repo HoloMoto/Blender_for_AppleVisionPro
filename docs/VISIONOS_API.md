@@ -15,7 +15,7 @@ are published through a stable C ABI and consumed from Python as
 | Python package | `scripts/modules/blender_visionos/` |
 | Example add-on | `scripts/addons_core/visionos_hand_probe.py` |
 
-**API version:** `1` (`BLENDER_VISIONOS_API_VERSION`)
+**API version:** `2` (`BLENDER_VISIONOS_API_VERSION`)
 
 **Coordinates:** Blender world space, **meters**, **Z-up**, relative to the
 Immersive world root (same mapping as Muse / Hand pen).
@@ -53,7 +53,7 @@ to the **Info** editor (see [Stdout bridge](#stdout-bridge-print-on-visionos)).
 |------|-----|---------|
 | `hand_tracking` | `1 << 0` | Hand snapshot publisher is available |
 | `immersive_active` | `1 << 1` | Immersive Space is currently open |
-| `realitykit_scene` | `1 << 2` | **Reserved** (spawn / scene query / world mesh) |
+| `realitykit_scene` | `1 << 2` | RealityKit scene spawn / query; also gates [World mesh](#world-mesh--blender_visionosworld_mesh) (a published mesh exists) |
 
 Always check members before using a capability:
 
@@ -131,6 +131,75 @@ class OT_watch(bpy.types.Operator):
 
 ---
 
+## World mesh — `blender_visionos.world_mesh`
+
+ARKit scene reconstruction (room / furniture mesh), accumulated from all mesh
+anchors while the Immersive Space is open and published to native at ~2 Hz.
+Requires the `realitykit_scene` capability bit (see above) — check it before
+reading, since older host builds (API v1) do not publish a world mesh at all.
+
+Capped to `16384` vertices / `49152` indices (`_native.WORLD_MESH_MAX_VERTS` /
+`_native.WORLD_MESH_MAX_INDICES`); `meta().truncated` is `True` if the live
+scene exceeded the cap.
+
+### `meta() -> WorldMeshMeta`
+
+Poll size / availability without copying vertex data.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `ok` | `bool` | Native call succeeded |
+| `available` | `bool` | A world mesh has been published at least once |
+| `revision` | `int` | Bumped on every publish — compare to detect new geometry |
+| `vertex_count` / `index_count` | `int` | Current buffer sizes |
+| `truncated` | `bool` | Live scene exceeded the vertex/index cap |
+| `immersive_active` | `bool` | Immersive Space open |
+
+### `arrays() -> (verts, indices)`
+
+Copy the latest mesh: `verts` is a list of `(x, y, z)` tuples (Blender world
+space, meters), `indices` is a flat triangle-index list.
+
+### `to_mesh_object(name="VisionOSWorldMesh") -> bpy.types.Object | None`
+
+Convenience: build/update a real Blender mesh object from the latest world
+mesh (creates it in the active scene collection on first call). Returns
+`None` if no mesh is available yet.
+
+```python
+import blender_visionos as vision
+
+if "realitykit_scene" in vision.capabilities():
+    meta = vision.world_mesh.meta()
+    if meta.available:
+        obj = vision.world_mesh.to_mesh_object()
+```
+
+---
+
+## Lightweight multi-object transform sync
+
+Separate from this Python package: the Immersive sidebar (`View3D` ▸ N-panel
+▸ **Immersive** ▸ 空間シーン同期 ▸ 「物体移動も空間へ反映（軽量）」) can push
+**every** visible mesh object's world *location* (no rotation/scale, no USD)
+to the open Immersive Space every frame, so Object Mode demos (Tetris-style
+falling blocks, etc.) stay in sync without a full USD re-export.
+
+This is a **host feature**, not a `blender_visionos` Python API — there is no
+Python entry point for it. It is wired end-to-end through GHOST:
+
+`wm_operators.cc` (collects visible mesh world locations)
+→ `GHOST_IOS_immersive_update_object_transforms()` (`GHOST_C-api.h`)
+→ `GHOST_VisionImmersiveBridge` → `BlenderImmersiveBridge.swift`
+→ `BlenderImmersiveState.objectTransformNames` / `.objectTransformXYZ`
+→ `BlenderImmersiveSpaceView`'s `ObjectSync.updateObjectTransforms()`, which
+finds each USD entity by (USD-safe) Blender object name and repositions it —
+no collision-shape rebuild, so it stays cheap even with many objects.
+Structure/geometry changes (added/removed objects, edited meshes) still go
+through the existing USD re-export path.
+
+---
+
 ## C ABI (for native / ctypes)
 
 Header: `WM_ios_visionos_api.h`
@@ -140,9 +209,20 @@ int BLENDER_VISIONOS_available(void);
 uint64_t BLENDER_VISIONOS_capabilities(void);
 int BLENDER_VISIONOS_hand_snapshot(BLENDER_VISIONOS_HandSnapshot *out);
 
+/* World mesh (scene reconstruction) */
+int BLENDER_VISIONOS_world_mesh_meta(BLENDER_VISIONOS_WorldMeshMeta *out);
+int BLENDER_VISIONOS_world_mesh_copy(float *out_xyz, uint32_t max_verts,
+                                     uint32_t *out_vertex_count,
+                                     uint32_t *out_indices, uint32_t max_indices,
+                                     uint32_t *out_index_count);
+
 /* Publisher / host only — not for add-ons */
 void BLENDER_VISIONOS_hand_publish(const BLENDER_VISIONOS_HandSnapshot *in);
 void BLENDER_VISIONOS_set_immersive_active(int active);
+void BLENDER_VISIONOS_world_mesh_publish(uint32_t revision, const float *xyz,
+                                         uint32_t vertex_count,
+                                         const uint32_t *indices, uint32_t index_count,
+                                         int truncated);
 
 /* visionOS stdout bridge */
 void BLENDER_IOS_py_stdout_line(const char *line, int is_err);
@@ -191,7 +271,8 @@ Look for output in the **Info** editor (report list), not a terminal window.
 | Middle / ring / little tips | ABI reserved; filled from palm until OS/SDK grows |
 | `print` → Info | **Shipped** (build 90+) |
 | RealityKit scene spawn / query | Reserved bit only |
-| World mesh / plane detection | Not started |
+| World mesh (ARKit scene reconstruction) | **Shipped** (API v2) — see [World mesh](#world-mesh--blender_visionosworld_mesh) |
+| Plane detection | Not started |
 | Shared session hooks for add-ons | Immersive Multiuser MVP exists separately; not yet in this package |
 
 Related Immersive behavior (Muse, Multiuser, spatial shading board) is

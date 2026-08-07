@@ -49,6 +49,18 @@ public final class BlenderImmersiveBridge: NSObject {
     #endif
   }
 
+  @objc(updateObjectTransformsNames:count:xyz:)
+  public static func updateObjectTransformsNames(
+    _ names: [String]?, count: Int32, xyz: [NSNumber]?
+  ) {
+    #if os(visionOS)
+      DispatchQueue.main.async {
+        BlenderImmersiveState.shared.updateObjectTransforms(
+          names: names, count: Int(count), xyz: xyz)
+      }
+    #endif
+  }
+
   @objc(updateHandMenuMode:strength:radius:brushLabel:brushKind:)
   public static func updateHandMenuMode(
     _ mode: Int32, strength: Float, radius: Float, brushLabel: String?, brushKind: Int32

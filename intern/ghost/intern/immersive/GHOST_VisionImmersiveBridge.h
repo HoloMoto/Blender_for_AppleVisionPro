@@ -35,6 +35,17 @@ void GHOST_Vision_update_active_object(const char *object_name,
                                        float blender_y,
                                        float blender_z);
 
+/**
+ * Lightweight multi-object transform sync (no USD).
+ * \param names_blob: \a count concatenated C-strings (each NUL-terminated).
+ * \param names_blob_len: total byte length of \a names_blob (including NULs).
+ * \param xyz: \a count * 3 floats, Blender world space.
+ */
+void GHOST_Vision_update_object_transforms(int count,
+                                           const char *names_blob,
+                                           int names_blob_len,
+                                           const float *xyz);
+
 /** Push Immersive hand-menu state for the Swift UI. */
 void GHOST_Vision_update_hand_menu(int mode,
                                    float strength,

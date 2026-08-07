@@ -32,12 +32,14 @@ from __future__ import annotations
 
 from . import _native
 from . import hands as hands
+from . import world_mesh as world_mesh
 
 __all__ = (
     "available",
     "api_version",
     "capabilities",
     "hands",
+    "world_mesh",
 )
 
 api_version = _native.API_VERSION
@@ -52,7 +54,10 @@ def capabilities() -> frozenset[str]:
     """Named capabilities currently offered by the host.
 
     Known names:
-      ``hand_tracking``, ``immersive_active``, ``realitykit_scene`` (reserved).
+      ``hand_tracking``, ``immersive_active``,
+      ``realitykit_scene`` (RealityKit scene spawn / query; also gates
+      :mod:`blender_visionos.world_mesh` — world mesh is published under the
+      same bit until a dedicated capability is warranted).
     """
     bits = int(_native.capabilities())
     names = []

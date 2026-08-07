@@ -12,8 +12,8 @@ View3D / Image Editor → **N-panel → Immersive → 空間シーン同期**:
 
 | Option | Default | Notes |
 |--------|---------|-------|
-| **物体移動も空間へ反映** | Off | Object Mode transforms → USD reload. Needed for multi-object demos (Tetris). Active object alone already has a lightweight transform bridge. |
-| **空間更新間隔** | 0.35 s | Debounce for USDZ re-export. Lower = snappier / heavier; higher = lighter. |
+| **物体移動も空間へ反映** | Off | Lightweight position sync for up to 96 visible meshes (**no USD**). New objects / mesh edits still go through USD. |
+| **空間更新間隔** | 0.35 s | Debounce for USDZ re-export (structure / sculpt / geo). Lower = snappier / heavier. |
 
 Tip-up during sculpt stays near-immediate (~0.05 s) even when the interval is longer.
 
