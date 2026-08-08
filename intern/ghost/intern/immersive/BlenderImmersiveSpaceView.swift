@@ -854,6 +854,8 @@ import simd
         sceneRoot: newEntity,
         placementOffset: placementOffset,
         generateCollisions: !lightModelReload)
+      /* visionOS 27+: BloomComponent on emissive meshes (hierarchical). */
+      BlenderImmersiveBloom.apply(worldRoot: worldRoot, sceneRoot: newEntity)
       lightModelReload = false
     }
 
