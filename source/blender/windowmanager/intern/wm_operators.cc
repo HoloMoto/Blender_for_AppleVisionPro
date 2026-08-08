@@ -4670,7 +4670,7 @@ extern "C" void WM_IOS_immersive_muse_set_knock_brush(const int knock_count, con
   if (knock_count < 1 || knock_count > 3) {
     return;
   }
-  const int k = std::clamp(kind, 0, WMIOS_MUSE_BRUSH_MASK);
+  const int k = std::clamp(kind, 0, int(WMIOS_MUSE_BRUSH_MASK));
   g_wm_ios_muse_knock_brush[knock_count - 1] = k;
   fprintf(stderr, "[immersive] muse knock%dx -> brush kind=%d\n", knock_count, k);
   fflush(stderr);
