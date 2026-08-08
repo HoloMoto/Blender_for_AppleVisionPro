@@ -23,6 +23,9 @@ import UIKit
   private func WM_IOS_immersive_muse_sample(
     _ x: Float, _ y: Float, _ z: Float, _ pressure: Float, _ tipPressed: Int32)
 
+  @_silgen_name("WM_IOS_immersive_muse_knock")
+  private func WM_IOS_immersive_muse_knock(_ count: Int32)
+
   @MainActor
   final class BlenderImmersiveMusePenController: ObservableObject {
     @Published private(set) var isConnected = false
@@ -52,6 +55,11 @@ import UIKit
     /** Counts inputStateAvailableHandler wakes (diagnostics). */
     private var handlerWakeCount = 0
     private var queuedStateCount = 0
+    /** Primary (select) button knock gesture — single/double/triple within window. */
+    private var lastPrimaryDown = false
+    private var knockTapCount = 0
+    private var knockDeadline: Date?
+    private let knockWindowSeconds: TimeInterval = 0.35
 
     private enum SessionLifecycle {
       case idle
@@ -88,6 +96,11 @@ import UIKit
       secondaryPressedByStylus.removeAll()
       primaryPressureByStylus.removeAll()
       secondaryPressureByStylus.removeAll()
+      lastPrimaryDown = false
+      knockTapCount = 0
+      knockDeadline = nil
+      isTipDown = false
+      tipPressure = 0
       lastLoggedTipDown = false
       handlerWakeCount = 0
       queuedStateCount = 0
@@ -327,8 +340,9 @@ import UIKit
       var secDown = false
       var secP: Float = 0
 
-      var drawDown: Bool { tipDown || primDown || secDown }
-      var drawPressure: Float { max(tipP, primP, secP) }
+      /* Tip + secondary draw. Primary (barrel / select) is reserved for knock shortcuts. */
+      var drawDown: Bool { tipDown || secDown }
+      var drawPressure: Float { max(tipP, secP) }
     }
 
     private static func readStylusButtons(from input: any GCDevicePhysicalInput) -> StylusButtonRead {
@@ -387,11 +401,10 @@ import UIKit
       secondaryPressureByStylus[key] = read.secP
 
       let drawDown = read.drawDown
-      /* Prefer secondary for air drawing (Apple), then tip, then primary. */
+      /* Tip / secondary draw pressure only — primary is knock, not brush force. */
       let pressure: Float = {
         if read.secP > 0.001 { return read.secP }
         if read.tipP > 0.001 { return read.tipP }
-        if read.primDown { return max(read.primP, 0.75) }
         return read.drawPressure
       }()
       let outP: Float = drawDown ? max(pressure, 0.15) : 0
@@ -399,6 +412,16 @@ import UIKit
       isTipDown = drawDown
       tipPressure = outP
       logTipTransitionIfNeeded(pressed: drawDown, pressure: tipPressure, source: source)
+
+      /* Rising edge of primary (select) → accumulate knocks (sculpt brush shortcuts). */
+      if read.primDown && !lastPrimaryDown {
+        knockTapCount = min(knockTapCount + 1, 3)
+        knockDeadline = Date().addingTimeInterval(knockWindowSeconds)
+        let msg = "muse knock tap=\(knockTapCount) (window \(knockWindowSeconds)s)"
+        print("[immersive] \(msg)")
+        BlenderIOSDiagnosticLog.bootSwiftOnly(msg)
+      }
+      lastPrimaryDown = read.primDown
 
       if changed || source.hasPrefix("handler") || source.hasPrefix("element") {
         let msg = String(
@@ -449,6 +472,7 @@ import UIKit
         switch brush {
         case 4: brushName = "Inflate+"
         case 5: brushName = "Inflate−"
+        case 6: brushName = "Mask"
         case 3: brushName = "Smooth"
         case 2: brushName = "Grab"
         default: brushName = BlenderImmersiveState.shared.handMenuBrushLabel
@@ -549,6 +573,20 @@ import UIKit
               if BlenderImmersiveMultiuserSession.shared.isActive {
                 BlenderImmersiveMultiuserSession.shared.sendLocalPresence(
                   x: blender.x, y: blender.y, z: blender.z, tipDown: drawDown)
+              }
+            }
+
+            /* Fire knock after quiet window (sculpt mode only). */
+            if let deadline = self.knockDeadline, Date() >= deadline {
+              let n = self.knockTapCount
+              self.knockTapCount = 0
+              self.knockDeadline = nil
+              if n > 0, BlenderImmersiveState.shared.handMenuMode == 2 {
+                WM_IOS_immersive_muse_knock(Int32(n))
+                let msg = "muse knock fire count=\(n)"
+                print("[immersive] \(msg)")
+                BlenderIOSDiagnosticLog.bootSwiftOnly(msg)
+                self.refreshStatus()
               }
             }
 

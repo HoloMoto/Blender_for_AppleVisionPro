@@ -4342,6 +4342,7 @@ enum {
   WMIOS_MUSE_BRUSH_SMOOTH = 3,
   WMIOS_MUSE_BRUSH_INFLATE_ADD = 4,
   WMIOS_MUSE_BRUSH_INFLATE_SUB = 5,
+  WMIOS_MUSE_BRUSH_MASK = 6,
 };
 
 struct WMIOSImmersiveHandMenuPending {
@@ -4380,6 +4381,12 @@ static WMIOSImmersiveHandMenuPending g_wm_ios_hand_menu_cmd;
  * (no armature yet / mode_set toggle failed). */
 static int g_wm_ios_immersive_ui_mode = 0;
 static int g_wm_ios_muse_brush_kind = WMIOS_MUSE_BRUSH_INFLATE_ADD;
+/** Muse select-button knock → sculpt brush kinds (1/2/3 taps). Defaults: Inflate+/Deflate/Mask. */
+static int g_wm_ios_muse_knock_brush[3] = {
+    WMIOS_MUSE_BRUSH_INFLATE_ADD,
+    WMIOS_MUSE_BRUSH_INFLATE_SUB,
+    WMIOS_MUSE_BRUSH_MASK,
+};
 static bool g_wm_ios_muse_vpaint_erase = false;
 /** Hand-menu radius/strength — prefer these over brush asset values for Muse. */
 static float g_wm_ios_muse_radius_m = 0.25f;
@@ -4461,6 +4468,8 @@ static const char *wm_ios_muse_essentials_brush_name(const int kind)
     case WMIOS_MUSE_BRUSH_INFLATE_SUB:
       /* Essentials asset id in 5.0. */
       return "Inflate/Deflate";
+    case WMIOS_MUSE_BRUSH_MASK:
+      return "Mask";
     case WMIOS_MUSE_BRUSH_DRAW:
     default:
       return "Draw";
@@ -4479,6 +4488,8 @@ static char wm_ios_muse_sculpt_brush_type(const int kind)
     case WMIOS_MUSE_BRUSH_INFLATE_ADD:
     case WMIOS_MUSE_BRUSH_INFLATE_SUB:
       return SCULPT_BRUSH_TYPE_INFLATE;
+    case WMIOS_MUSE_BRUSH_MASK:
+      return SCULPT_BRUSH_TYPE_MASK;
     case WMIOS_MUSE_BRUSH_DRAW:
     default:
       return SCULPT_BRUSH_TYPE_DRAW;
@@ -4651,6 +4662,31 @@ extern "C" void WM_IOS_immersive_muse_toggle_inflate_direction()
 extern "C" void WM_IOS_immersive_muse_toggle_vpaint_erase()
 {
   g_wm_ios_muse_vpaint_erase = !g_wm_ios_muse_vpaint_erase;
+}
+
+/** Configure Muse select-button knock → brush kind (knock_count 1..3, kind 0..6). */
+extern "C" void WM_IOS_immersive_muse_set_knock_brush(const int knock_count, const int kind)
+{
+  if (knock_count < 1 || knock_count > 3) {
+    return;
+  }
+  const int k = std::clamp(kind, 0, WMIOS_MUSE_BRUSH_MASK);
+  g_wm_ios_muse_knock_brush[knock_count - 1] = k;
+  fprintf(stderr, "[immersive] muse knock%dx -> brush kind=%d\n", knock_count, k);
+  fflush(stderr);
+}
+
+/** Fire a completed primary-button knock sequence (1=single, 2=double, 3=triple). */
+extern "C" void WM_IOS_immersive_muse_knock(const int count)
+{
+  const int n = std::clamp(count, 1, 3);
+  const int kind = g_wm_ios_muse_knock_brush[n - 1];
+  wm_ios_muse_queue_brush_kind(kind);
+  char buf[96];
+  SNPRINTF(buf, "muse knock x%d -> brush %d", n, kind);
+  GHOST_IOS_diag_log(buf);
+  fprintf(stderr, "[immersive] %s\n", buf);
+  fflush(stderr);
 }
 
 extern "C" void WM_IOS_immersive_hand_menu_set_strength(const float strength)
@@ -5252,6 +5288,9 @@ static void wm_ios_immersive_publish_hand_menu_state(bContext *C, Object *ob)
         break;
       case WMIOS_MUSE_BRUSH_CLAY:
         brush_base = "Clay";
+        break;
+      case WMIOS_MUSE_BRUSH_MASK:
+        brush_base = "Mask";
         break;
       default:
         brush_base = "Draw";
@@ -7352,6 +7391,124 @@ static void wm_ios_immersive_muse_sculpt_grab_dyntopo(bContext *C,
   }
 }
 
+
+/**
+ * Sculpt Mask via Muse — vertex-float ".sculpt_mask" (same idea as VPaint).
+ * Works for Mesh and DynTopo BMesh.
+ */
+static void wm_ios_immersive_muse_sculpt_mask(bContext *C,
+                                              Object *ob,
+                                              const float muse_world[3],
+                                              const bool tip_down,
+                                              const float pressure)
+{
+  using namespace blender;
+
+  if (ob == nullptr || ob->type != OB_MESH) {
+    return;
+  }
+
+  float radius = std::clamp(g_wm_ios_muse_radius_m, 0.02f, 1.5f);
+  float brush_strength = std::clamp(g_wm_ios_muse_strength, 0.05f, 1.0f);
+  const float tip_force = std::clamp(pressure, 0.0f, 1.0f);
+  const float strength = std::max(tip_force, 0.05f) * brush_strength;
+
+  float muse_local[3];
+  mul_v3_m4v3(muse_local, ob->world_to_object().ptr(), muse_world);
+  const float radius_sq = radius * radius;
+
+  if (!tip_down) {
+    if (g_wm_ios_muse_sculpt_dragging) {
+      g_wm_ios_muse_sculpt_dragging = false;
+      g_wm_ios_muse_stroke_active = false;
+      if (Mesh *mesh = static_cast<Mesh *>(ob->data)) {
+        DEG_id_tag_update(&mesh->id, ID_RECALC_GEOMETRY);
+        WM_event_add_notifier(C, NC_OBJECT | ND_DRAW, ob);
+        ED_undo_push(C, "Muse Mask");
+      }
+    }
+    return;
+  }
+
+  g_wm_ios_muse_sculpt_dragging = true;
+  g_wm_ios_muse_stroke_active = true;
+
+  if (BKE_object_sculpt_use_dyntopo(ob)) {
+    SculptSession *ss = ob->sculpt;
+    if (ss == nullptr || ss->bm == nullptr) {
+      return;
+    }
+    BMesh *bm = ss->bm;
+    int offset = CustomData_get_offset_named(&bm->vdata, CD_PROP_FLOAT, ".sculpt_mask");
+    if (offset == -1) {
+      BM_data_layer_add_named(bm, &bm->vdata, CD_PROP_FLOAT, ".sculpt_mask");
+      offset = CustomData_get_offset_named(&bm->vdata, CD_PROP_FLOAT, ".sculpt_mask");
+    }
+    if (offset == -1) {
+      return;
+    }
+    BMVert *v;
+    BMIter iter;
+    bool any = false;
+    BM_ITER_MESH (v, &iter, bm, BM_VERTS_OF_MESH) {
+      const float dist_sq = len_squared_v3v3(v->co, muse_local);
+      if (dist_sq > radius_sq) {
+        continue;
+      }
+      const float t = 1.0f - (sqrtf(dist_sq) / radius);
+      const float falloff = t * t * (3.0f - 2.0f * t);
+      float *mask = BM_ELEM_CD_GET_FLOAT_P(v, offset);
+      *mask = std::clamp(*mask + falloff * strength, 0.0f, 1.0f);
+      any = true;
+    }
+    if (any) {
+      g_wm_ios_muse_geometry_dirty = true;
+      DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
+      WM_event_add_notifier(C, NC_OBJECT | ND_DRAW, ob);
+    }
+    return;
+  }
+
+  Mesh *mesh = static_cast<Mesh *>(ob->data);
+  if (mesh == nullptr || mesh->verts_num <= 0) {
+    return;
+  }
+
+  if (Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C)) {
+    BKE_sculpt_mask_layers_ensure(depsgraph, CTX_data_main(C), ob, nullptr);
+  }
+  else {
+    BKE_sculpt_mask_layers_ensure(nullptr, CTX_data_main(C), ob, nullptr);
+  }
+
+  bke::MutableAttributeAccessor attributes = mesh->attributes_for_write();
+  bke::SpanAttributeWriter<float> masks =
+      attributes.lookup_or_add_for_write_span<float>(".sculpt_mask", bke::AttrDomain::Point);
+  if (!masks) {
+    return;
+  }
+
+  const Span<float3> positions = mesh->vert_positions();
+  bool any = false;
+  for (const int i : positions.index_range()) {
+    const float dist_sq = len_squared_v3v3(&positions[i].x, muse_local);
+    if (dist_sq > radius_sq) {
+      continue;
+    }
+    const float t = 1.0f - (sqrtf(dist_sq) / radius);
+    const float falloff = t * t * (3.0f - 2.0f * t);
+    masks.span[i] = std::clamp(masks.span[i] + falloff * strength, 0.0f, 1.0f);
+    any = true;
+  }
+  masks.finish();
+  if (any) {
+    g_wm_ios_muse_geometry_dirty = true;
+    DEG_id_tag_update(&mesh->id, ID_RECALC_GEOMETRY);
+    DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
+    WM_event_add_notifier(C, NC_OBJECT | ND_DRAW, ob);
+  }
+}
+
 /**
  * Sculpt Mode: continuous soft deform along the Muse tip.
  * Brush kind (hand menu): Draw/Clay = tip follow, Grab = locked cluster,
@@ -7388,6 +7545,11 @@ static void wm_ios_immersive_muse_sculpt_grab(bContext *C,
       last_ensure = now_ensure;
       wm_ios_ensure_paint_brush(C, PaintMode::Sculpt, g_wm_ios_muse_brush_kind);
     }
+  }
+
+  if (g_wm_ios_muse_brush_kind == WMIOS_MUSE_BRUSH_MASK) {
+    wm_ios_immersive_muse_sculpt_mask(C, ob, muse_world, tip_down, pressure);
+    return;
   }
 
   /* DynTopo wanted but not yet active — enable once before deform. */
@@ -9393,6 +9555,32 @@ static void WM_OT_ios_immersive_set_mode(wmOperatorType *ot)
               4);
 }
 
+
+static wmOperatorStatus wm_ios_immersive_set_muse_knock_brush_exec(bContext * /*C*/, wmOperator *op)
+{
+  WM_IOS_immersive_muse_set_knock_brush(RNA_int_get(op->ptr, "knock"), RNA_int_get(op->ptr, "kind"));
+  return OPERATOR_FINISHED;
+}
+
+static void WM_OT_ios_immersive_set_muse_knock_brush(wmOperatorType *ot)
+{
+  ot->name = "Immersive Muse Knock Brush";
+  ot->idname = "WM_OT_ios_immersive_set_muse_knock_brush";
+  ot->description = "Map Muse select-button knock count to a sculpt brush kind";
+  ot->exec = wm_ios_immersive_set_muse_knock_brush_exec;
+  ot->poll = wm_ios_immersive_poll;
+  RNA_def_int(ot->srna, "knock", 1, 1, 3, "Knock", "1 single / 2 double / 3 triple", 1, 3);
+  RNA_def_int(ot->srna,
+              "kind",
+              4,
+              0,
+              6,
+              "Brush Kind",
+              "0 Draw / 1 Clay / 2 Grab / 3 Smooth / 4 Inflate+ / 5 Inflate- / 6 Mask",
+              0,
+              6);
+}
+
 static wmOperatorStatus wm_ios_immersive_set_usd_refresh_interval_exec(bContext * /*C*/,
                                                                      wmOperator *op)
 {
@@ -9503,6 +9691,7 @@ void wm_operatortypes_register()
   WM_operatortype_append(WM_OT_ios_immersive_set_mode);
   WM_operatortype_append(WM_OT_ios_immersive_set_usd_refresh_interval);
   WM_operatortype_append(WM_OT_ios_immersive_set_sync_transforms);
+  WM_operatortype_append(WM_OT_ios_immersive_set_muse_knock_brush);
   WM_operatortype_append(WM_OT_ios_immersive_remesh);
   WM_operatortype_append(WM_OT_ios_immersive_multiuser_host);
   WM_operatortype_append(WM_OT_ios_immersive_multiuser_join);

@@ -116,6 +116,7 @@ import UIKit
     private let brushes: [(title: String, toolId: String, kind: Int)] = [
       ("Inflate+", "builtin.brush", 4),
       ("Inflate−", "builtin.brush", 5),
+      ("Mask", "builtin.brush", 6),
       ("Smooth", "builtin.brush", 3),
       ("Grab", "builtin.brush", 2),
     ]

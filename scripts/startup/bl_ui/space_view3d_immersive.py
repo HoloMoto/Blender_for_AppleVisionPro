@@ -61,6 +61,35 @@ def _update_sync_transforms(self, context):
     bpy.ops.wm.ios_immersive_set_sync_transforms(enable=self.sync_transforms_to_space)
 
 
+_MUSE_BRUSH_ITEMS = (
+    ('0', "Draw", "Draw"),
+    ('1', "Clay", "Clay"),
+    ('2', "Grab", "Grab"),
+    ('3', "Smooth", "Smooth"),
+    ('4', "Inflate+", "インフレート加算"),
+    ('5', "Inflate−", "デフレート"),
+    ('6', "Mask", "スカルプトマスク"),
+)
+
+
+def _update_muse_knock_single(self, context):
+    if not hasattr(bpy.ops.wm, "ios_immersive_set_muse_knock_brush"):
+        return
+    bpy.ops.wm.ios_immersive_set_muse_knock_brush(knock=1, kind=int(self.muse_knock_single))
+
+
+def _update_muse_knock_double(self, context):
+    if not hasattr(bpy.ops.wm, "ios_immersive_set_muse_knock_brush"):
+        return
+    bpy.ops.wm.ios_immersive_set_muse_knock_brush(knock=2, kind=int(self.muse_knock_double))
+
+
+def _update_muse_knock_triple(self, context):
+    if not hasattr(bpy.ops.wm, "ios_immersive_set_muse_knock_brush"):
+        return
+    bpy.ops.wm.ios_immersive_set_muse_knock_brush(knock=3, kind=int(self.muse_knock_triple))
+
+
 class ImmersiveOptions(PropertyGroup):
     use_hand_as_pen: BoolProperty(
         name="手をペン代わりに",
@@ -133,6 +162,27 @@ class ImmersiveOptions(PropertyGroup):
         precision=2,
         update=_update_usd_refresh_interval,
     )
+    muse_knock_single: EnumProperty(
+        name="シングルノック",
+        description="Muse 選択ボタンを1回ノックしたときのブラシ",
+        items=_MUSE_BRUSH_ITEMS,
+        default='4',
+        update=_update_muse_knock_single,
+    )
+    muse_knock_double: EnumProperty(
+        name="ダブルノック",
+        description="Muse 選択ボタンを2回ノックしたときのブラシ",
+        items=_MUSE_BRUSH_ITEMS,
+        default='5',
+        update=_update_muse_knock_double,
+    )
+    muse_knock_triple: EnumProperty(
+        name="トリプルノック",
+        description="Muse 選択ボタンを3回ノックしたときのブラシ",
+        items=_MUSE_BRUSH_ITEMS,
+        default='6',
+        update=_update_muse_knock_triple,
+    )
 
 
 class ImmersivePanelBase:
@@ -184,6 +234,17 @@ class ImmersivePanelBase:
         box.prop(opts, "radius", slider=True)
         if hasattr(bpy.ops.wm, "ios_immersive_remesh"):
             box.operator("wm.ios_immersive_remesh", text="リメッシュ", icon='MOD_REMESH')
+
+        if opts.mode == '2':
+            knock = layout.box()
+            knock.label(text="Muse ノック（選択ボタン）", icon='MOUSE_LMB')
+            knock.prop(opts, "muse_knock_single", text="シングル")
+            knock.prop(opts, "muse_knock_double", text="ダブル")
+            knock.prop(opts, "muse_knock_triple", text="トリプル")
+            hint = knock.column(align=True)
+            hint.scale_y = 0.85
+            hint.label(text="筆圧ボタン以外を連続ノック")
+            hint.label(text="判定窓 0.35秒 / 既定: +/−/Mask")
 
 
 class VIEW3D_PT_immersive(ImmersivePanelBase, Panel):

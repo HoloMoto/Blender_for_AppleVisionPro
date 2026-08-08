@@ -66,7 +66,7 @@ public extension Notification.Name {
   @objc public private(set) var handMenuMode: Int = 0
   @objc public private(set) var handMenuStrength: Float = 0.5
   @objc public private(set) var handMenuRadius: Float = 0.25
-  /** 0 Draw / 1 Clay / 2 Grab / 3 Smooth / 4 Inflate+ / 5 Inflate− */
+  /** 0 Draw / 1 Clay / 2 Grab / 3 Smooth / 4 Inflate+ / 5 Inflate− / 6 Mask */
   @objc public private(set) var handMenuBrushKind: Int = 4
   @objc public private(set) var handMenuBrushLabel: String = "Inflate+"
   /** Immersive DynTopo (desktop Dynamic Topology) — default ON. */
