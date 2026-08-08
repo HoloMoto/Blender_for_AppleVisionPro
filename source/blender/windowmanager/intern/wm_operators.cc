@@ -4395,6 +4395,8 @@ static float g_wm_ios_muse_strength = 0.5f;
 static bool g_wm_ios_muse_dyntopo_wanted = true;
 /** Immersive: use right-hand pinch instead of Muse stylus. */
 static bool g_wm_ios_use_hand_as_pen = false;
+/** Object Mode: pinch-grab nearest object origin and place it in Immersive. */
+static bool g_wm_ios_object_hand_pick = false;
 /** Immersive: when hand input is active, sculpt by proximity without pinch. */
 static bool g_wm_ios_hand_proximity_sculpt = false;
 /** Immersive: spatial material node editor (Shading equivalent). */
@@ -4729,6 +4731,11 @@ extern "C" void WM_IOS_immersive_set_hand_as_pen(const int enabled)
 {
   g_wm_ios_use_hand_as_pen = enabled != 0;
   GHOST_IOS_immersive_set_use_hand_as_pen(g_wm_ios_use_hand_as_pen);
+}
+
+extern "C" void WM_IOS_immersive_set_object_hand_pick(const int enabled)
+{
+  g_wm_ios_object_hand_pick = enabled != 0;
 }
 
 extern "C" void WM_IOS_immersive_set_hand_proximity_sculpt(const int enabled)
@@ -8384,11 +8391,14 @@ static void wm_ios_immersive_muse_vertex_paint(bContext *C,
 }
 
 /**
- * Immersive Anim: pinch-grab nearest object origin and translate in world space.
+ * Immersive Anim / Object hand-pick: pinch-grab nearest object origin and
+ * translate in world space. Hand-pick keeps Immersive in sync via active
+ * object transform updates (no per-frame USD reload while dragging).
  */
 static void wm_ios_immersive_muse_object_grab(bContext *C,
                                               const float muse_world[3],
-                                              const bool tip_down)
+                                              const bool tip_down,
+                                              const bool hand_pick_mode)
 {
   if (!tip_down) {
     if (g_wm_ios_obj_grab_dragging) {
@@ -8399,8 +8409,16 @@ static void wm_ios_immersive_muse_object_grab(bContext *C,
       if (moved != nullptr) {
         DEG_id_tag_update(&moved->id, ID_RECALC_TRANSFORM);
         WM_event_add_notifier(C, NC_OBJECT | ND_TRANSFORM, moved);
-        ED_undo_push(C, "Immersive Object Move");
-        g_wm_ios_muse_geometry_dirty = true;
+        ED_undo_push(C, hand_pick_mode ? "Immersive Hand Pick Place" : "Immersive Object Move");
+        /* One reload on release is enough for hand-pick; mid-drag uses
+         * lightweight active-object transform sync instead. */
+        if (!hand_pick_mode) {
+          g_wm_ios_muse_geometry_dirty = true;
+        }
+        else {
+          const float *wl = moved->object_to_world().location();
+          GHOST_IOS_immersive_update_active_object(moved->id.name + 2, wl[0], wl[1], wl[2]);
+        }
       }
     }
     return;
@@ -8418,6 +8436,7 @@ static void wm_ios_immersive_muse_object_grab(bContext *C,
     BKE_view_layer_synced_ensure(scene, view_layer);
 
     Object *nearest = nullptr;
+    Base *nearest_base = nullptr;
     float nearest_dist_sq = FLT_MAX;
     LISTBASE_FOREACH (Base *, base, BKE_view_layer_object_bases_get(view_layer)) {
       if (base == nullptr || base->object == nullptr) {
@@ -8452,10 +8471,14 @@ static void wm_ios_immersive_muse_object_grab(bContext *C,
       if (score < nearest_dist_sq) {
         nearest_dist_sq = score;
         nearest = cand;
+        nearest_base = base;
       }
     }
     if (nearest == nullptr || nearest_dist_sq > grab_radius_sq) {
       return;
+    }
+    if (hand_pick_mode && nearest_base != nullptr) {
+      blender::ed::object::base_activate(C, nearest_base);
     }
     g_wm_ios_obj_grab_ob = nearest;
     copy_v3_v3(g_wm_ios_obj_grab_last_world, muse_world);
@@ -8485,7 +8508,13 @@ static void wm_ios_immersive_muse_object_grab(bContext *C,
 
   DEG_id_tag_update(&ob->id, ID_RECALC_TRANSFORM);
   WM_event_add_notifier(C, NC_OBJECT | ND_TRANSFORM, ob);
-  g_wm_ios_muse_geometry_dirty = true;
+  if (hand_pick_mode) {
+    const float *wl = ob->object_to_world().location();
+    GHOST_IOS_immersive_update_active_object(ob->id.name + 2, wl[0], wl[1], wl[2]);
+  }
+  else {
+    g_wm_ios_muse_geometry_dirty = true;
+  }
 }
 
 /**
@@ -8750,7 +8779,20 @@ static void wm_ios_immersive_consume_muse(bContext *C, Object *ob)
     g_wm_ios_muse_last_mode = mode_now;
   }
 
+  const float co[3] = {sample_x, sample_y, sample_z};
+
   if (!sculpt_mode && !edit_mode && !vpaint_mode && !pose_mode && !anim_ui) {
+    /* Object Mode: optional hand/Muse pinch grab → place in Immersive. */
+    if (g_wm_ios_object_hand_pick) {
+      g_wm_ios_muse_edit_dragging = false;
+      g_wm_ios_muse_sculpt_dragging = false;
+      g_wm_ios_muse_vpaint_dragging = false;
+      g_wm_ios_pose_dragging = false;
+      wm_ios_immersive_muse_object_grab(C, co, tip_down, true);
+      CTX_wm_area_set(C, area_prev);
+      CTX_wm_region_set(C, region_prev);
+      return;
+    }
     CTX_wm_area_set(C, area_prev);
     CTX_wm_region_set(C, region_prev);
     if (g_wm_ios_muse_stroke_active) {
@@ -8759,8 +8801,6 @@ static void wm_ios_immersive_consume_muse(bContext *C, Object *ob)
     wm_ios_immersive_muse_cancel_interaction();
     return;
   }
-
-  const float co[3] = {sample_x, sample_y, sample_z};
 
   bool effective_tip_down = tip_down;
   float effective_pressure = pressure;
@@ -8781,7 +8821,7 @@ static void wm_ios_immersive_consume_muse(bContext *C, Object *ob)
         g_wm_ios_pose_pchan = nullptr;
         g_wm_ios_pose_arm_ob = nullptr;
       }
-      wm_ios_immersive_muse_object_grab(C, co, tip_down);
+      wm_ios_immersive_muse_object_grab(C, co, tip_down, false);
     }
     else {
       if (g_wm_ios_obj_grab_dragging) {
@@ -9471,6 +9511,28 @@ static void WM_OT_ios_immersive_set_hand_as_pen(wmOperatorType *ot)
   RNA_def_boolean(ot->srna, "enable", false, "Enable", "Use hand tip as pen");
 }
 
+static wmOperatorStatus wm_ios_immersive_set_object_hand_pick_exec(bContext *C, wmOperator *op)
+{
+  const bool enable = RNA_boolean_get(op->ptr, "enable");
+  WM_IOS_immersive_set_object_hand_pick(enable ? 1 : 0);
+  WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+  char buf[72];
+  SNPRINTF(buf, "object hand-pick: %s", enable ? "ON" : "OFF");
+  GHOST_IOS_diag_log(buf);
+  return OPERATOR_FINISHED;
+}
+
+static void WM_OT_ios_immersive_set_object_hand_pick(wmOperatorType *ot)
+{
+  ot->name = "Immersive Object Hand Pick";
+  ot->idname = "WM_OT_ios_immersive_set_object_hand_pick";
+  ot->description =
+      "In Object Mode, pinch near an object origin to grab and place it in Immersive Space";
+  ot->exec = wm_ios_immersive_set_object_hand_pick_exec;
+  ot->poll = wm_ios_immersive_poll;
+  RNA_def_boolean(ot->srna, "enable", false, "Enable", "Grab and place objects by pinch");
+}
+
 static wmOperatorStatus wm_ios_immersive_set_hand_proximity_sculpt_exec(bContext *C, wmOperator *op)
 {
   const bool enable = RNA_boolean_get(op->ptr, "enable");
@@ -9684,6 +9746,7 @@ void wm_operatortypes_register()
 #if defined(WITH_APPLE_CROSSPLATFORM)
   WM_operatortype_append(WM_OT_ios_immersive_toggle);
   WM_operatortype_append(WM_OT_ios_immersive_set_hand_as_pen);
+  WM_operatortype_append(WM_OT_ios_immersive_set_object_hand_pick);
   WM_operatortype_append(WM_OT_ios_immersive_set_hand_proximity_sculpt);
   WM_operatortype_append(WM_OT_ios_immersive_set_strength);
   WM_operatortype_append(WM_OT_ios_immersive_set_radius);

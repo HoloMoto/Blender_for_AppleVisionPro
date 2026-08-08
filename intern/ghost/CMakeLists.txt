@@ -227,22 +227,14 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
         )
         set(CMAKE_XCODE_ATTRIBUTE_SWIFT_VERSION "5.0")
         set(CMAKE_XCODE_ATTRIBUTE_ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES YES)
-        # BloomComponent / BloomOptionsComponent need XROS 27+ RealityKit.
-        set(_blender_xros_sdk_ver "")
-        if(DEFINED OSX_SYSTEM AND NOT OSX_SYSTEM STREQUAL "")
-          set(_blender_xros_sdk_ver "${OSX_SYSTEM}")
-        elseif(CMAKE_OSX_SYSROOT MATCHES "XROS([0-9]+(\\.[0-9]+)*)")
-          set(_blender_xros_sdk_ver "${CMAKE_MATCH_1}")
-        endif()
-        if(_blender_xros_sdk_ver VERSION_GREATER_EQUAL "27.0")
-          set(CMAKE_XCODE_ATTRIBUTE_SWIFT_ACTIVE_COMPILATION_CONDITIONS
-              "$(inherited) BLENDER_HAS_XROS_27_SDK")
-          message(STATUS "VisionOS BloomComponent enabled (XROS ${_blender_xros_sdk_ver})")
+        # BloomComponent needs XROS 27+ RealityKit headers at compile time.
+        if(DEFINED OSX_SYSTEM AND OSX_SYSTEM VERSION_LESS "27.0")
+          message(WARNING
+            "VisionOS BloomComponent requires XROS 27+ SDK (have '${OSX_SYSTEM}'). "
+            "Reconfigure with Xcode 27 / XROS27.0.sdk.")
         else()
-          message(STATUS
-            "VisionOS BloomComponent skipped (need XROS 27+ SDK; have '${_blender_xros_sdk_ver}')")
+          message(STATUS "VisionOS BloomComponent compile path active (need XROS 27+ SDK)")
         endif()
-        unset(_blender_xros_sdk_ver)
         message(STATUS "VisionOS Immersive Space (Swift/RealityKit) enabled")
       endif()
     endif()
