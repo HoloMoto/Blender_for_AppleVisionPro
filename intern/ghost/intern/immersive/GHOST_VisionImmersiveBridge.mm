@@ -283,6 +283,13 @@ void GHOST_Vision_set_use_hand_as_pen(const bool enable)
   }
 }
 
+void GHOST_Vision_set_object_extract_active(const bool enable)
+{
+  @autoreleasepool {
+    [BlenderImmersiveBridge setObjectExtractActive:enable ? YES : NO];
+  }
+}
+
 void GHOST_Vision_set_shader_space_enabled(const bool enable)
 {
   @autoreleasepool {
@@ -443,6 +450,7 @@ void GHOST_Vision_update_anim_timeline(const int /*frame*/,
 }
 
 void GHOST_Vision_set_use_hand_as_pen(const bool /*enable*/) {}
+void GHOST_Vision_set_object_extract_active(const bool /*enable*/) {}
 
 void GHOST_Vision_set_shader_space_enabled(const bool /*enable*/) {}
 

@@ -236,6 +236,11 @@ extern "C" bool GHOST_IOS_immersive_get_use_hand_as_pen(void)
   return g_ios_use_hand_as_pen;
 }
 
+extern "C" void GHOST_IOS_immersive_set_object_extract_active(const bool enable)
+{
+  GHOST_Vision_set_object_extract_active(enable);
+}
+
 extern "C" void GHOST_IOS_immersive_set_shader_space_enabled(const bool enable)
 {
   GHOST_Vision_set_shader_space_enabled(enable);

@@ -19,12 +19,6 @@ def _update_hand_as_pen(self, context):
     bpy.ops.wm.ios_immersive_set_hand_as_pen(enable=self.use_hand_as_pen)
 
 
-def _update_object_hand_pick(self, context):
-    if not hasattr(bpy.ops.wm, "ios_immersive_set_object_hand_pick"):
-        return
-    bpy.ops.wm.ios_immersive_set_object_hand_pick(enable=self.object_hand_pick)
-
-
 def _update_hand_proximity_sculpt(self, context):
     if not hasattr(bpy.ops.wm, "ios_immersive_set_hand_proximity_sculpt"):
         return
@@ -102,15 +96,6 @@ class ImmersiveOptions(PropertyGroup):
         description="Immersive で右手の人差し指＋ピンチを Muse の代わりに使う",
         default=False,
         update=_update_hand_as_pen,
-    )
-    object_hand_pick: BoolProperty(
-        name="物体を掴んで配置",
-        description=(
-            "Object Mode でオリジン附近をピンチ掴みし、離した位置へ配置する"
-            "（Immersive へ軽量同期／手ペンでも Muse でも可）"
-        ),
-        default=False,
-        update=_update_object_hand_pick,
     )
     hand_proximity_sculpt: BoolProperty(
         name="手の近接でスカルプト",
@@ -215,23 +200,26 @@ class ImmersivePanelBase:
         col = layout.column(align=True)
         col.label(text="Vision Pro Immersive", icon='WORLD')
         col.operator("wm.ios_immersive_toggle", text="Immersive 開く / 閉じる", icon='PLAY')
+        if hasattr(bpy.ops.wm, "ios_immersive_extract_active"):
+            col.operator(
+                "wm.ios_immersive_extract_active",
+                text="ビューから取り出して編集",
+                icon='OUTLINER_OB_MESH',
+            )
+            hint = col.column(align=True)
+            hint.scale_y = 0.85
+            hint.label(text="アクティブ物体を手へ→離してスカルプト")
 
         box = layout.box()
         box.label(text="入力", icon='HAND')
         box.prop(opts, "use_hand_as_pen")
         if opts.use_hand_as_pen:
             box.prop(opts, "hand_proximity_sculpt")
-        box.prop(opts, "object_hand_pick")
         help_col = box.column(align=True)
         help_col.scale_y = 0.85
         help_col.label(text="ON: 右手の甲=ブラシ位置")
         help_col.label(text="発火: ピンチ / 近接 を切替")
         help_col.label(text="OFF: Logitech Muse")
-        if opts.object_hand_pick:
-            pick = box.column(align=True)
-            pick.scale_y = 0.85
-            pick.label(text="物体掴み: Mode=Object")
-            pick.label(text="原点付近をピンチ→離して配置")
 
         box = layout.box()
         box.label(text="空間シーン同期", icon='FILE_REFRESH')
@@ -248,12 +236,8 @@ class ImmersivePanelBase:
         if opts.mode == '0':
             note = box.column(align=True)
             note.scale_y = 0.85
-            if opts.object_hand_pick:
-                note.label(text="Object + 物体掴み = 配置可")
-                note.label(text="編集は Edit / Sculpt / VPaint へ")
-            else:
-                note.label(text="Object = Immersive 閲覧専用")
-                note.label(text="編集は Edit / Sculpt / VPaint へ")
+            note.label(text="Object = Immersive 閲覧専用")
+            note.label(text="取り出し後は自動で Sculpt")
         box.prop(opts, "use_dyntopo")
         box.prop(opts, "strength", slider=True)
         box.prop(opts, "radius", slider=True)

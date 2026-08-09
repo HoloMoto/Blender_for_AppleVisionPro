@@ -4265,7 +4265,10 @@ static void WM_OT_stereo3d_set(wmOperatorType *ot)
 struct WMIOSImmersivePendingMove {
   std::mutex mutex;
   std::string object_name;
+  float x = 0.0f;
+  float y = 0.0f;
   float z = 0.0f;
+  bool has_xyz = false;
   bool pending = false;
 };
 
@@ -4312,6 +4315,24 @@ extern "C" void WM_IOS_immersive_set_object_z(const char *object_name, const flo
   std::lock_guard lock(g_wm_ios_immersive_pending_move.mutex);
   g_wm_ios_immersive_pending_move.object_name = object_name;
   g_wm_ios_immersive_pending_move.z = z;
+  g_wm_ios_immersive_pending_move.has_xyz = false;
+  g_wm_ios_immersive_pending_move.pending = true;
+}
+
+extern "C" void WM_IOS_immersive_set_object_world_location(const char *object_name,
+                                                          const float x,
+                                                          const float y,
+                                                          const float z)
+{
+  if (object_name == nullptr || object_name[0] == '\0') {
+    return;
+  }
+  std::lock_guard lock(g_wm_ios_immersive_pending_move.mutex);
+  g_wm_ios_immersive_pending_move.object_name = object_name;
+  g_wm_ios_immersive_pending_move.x = x;
+  g_wm_ios_immersive_pending_move.y = y;
+  g_wm_ios_immersive_pending_move.z = z;
+  g_wm_ios_immersive_pending_move.has_xyz = true;
   g_wm_ios_immersive_pending_move.pending = true;
 }
 
@@ -4395,8 +4416,12 @@ static float g_wm_ios_muse_strength = 0.5f;
 static bool g_wm_ios_muse_dyntopo_wanted = true;
 /** Immersive: use right-hand pinch instead of Muse stylus. */
 static bool g_wm_ios_use_hand_as_pen = false;
-/** Object Mode: pinch-grab nearest object origin and place it in Immersive. */
-static bool g_wm_ios_object_hand_pick = false;
+/**
+ * Extract-from-viewport session: open Immersive, follow tip with the active
+ * object until pinch release, then enter Sculpt for editing.
+ */
+static bool g_wm_ios_object_extract_active = false;
+static bool g_wm_ios_object_extract_seen_tip = false;
 /** Immersive: when hand input is active, sculpt by proximity without pinch. */
 static bool g_wm_ios_hand_proximity_sculpt = false;
 /** Immersive: spatial material node editor (Shading equivalent). */
@@ -4733,9 +4758,11 @@ extern "C" void WM_IOS_immersive_set_hand_as_pen(const int enabled)
   GHOST_IOS_immersive_set_use_hand_as_pen(g_wm_ios_use_hand_as_pen);
 }
 
-extern "C" void WM_IOS_immersive_set_object_hand_pick(const int enabled)
+extern "C" void WM_IOS_immersive_set_object_extract_active(const int enabled)
 {
-  g_wm_ios_object_hand_pick = enabled != 0;
+  g_wm_ios_object_extract_active = enabled != 0;
+  g_wm_ios_object_extract_seen_tip = false;
+  GHOST_IOS_immersive_set_object_extract_active(g_wm_ios_object_extract_active);
 }
 
 extern "C" void WM_IOS_immersive_set_hand_proximity_sculpt(const int enabled)
@@ -8391,14 +8418,13 @@ static void wm_ios_immersive_muse_vertex_paint(bContext *C,
 }
 
 /**
- * Immersive Anim / Object hand-pick: pinch-grab nearest object origin and
- * translate in world space. Hand-pick keeps Immersive in sync via active
- * object transform updates (no per-frame USD reload while dragging).
+ * Immersive Anim / extract: pinch-grab nearest object origin and translate
+ * in world space. `light_sync` skips per-frame USD dirty (transform bridge).
  */
 static void wm_ios_immersive_muse_object_grab(bContext *C,
                                               const float muse_world[3],
                                               const bool tip_down,
-                                              const bool hand_pick_mode)
+                                              const bool light_sync)
 {
   if (!tip_down) {
     if (g_wm_ios_obj_grab_dragging) {
@@ -8409,10 +8435,8 @@ static void wm_ios_immersive_muse_object_grab(bContext *C,
       if (moved != nullptr) {
         DEG_id_tag_update(&moved->id, ID_RECALC_TRANSFORM);
         WM_event_add_notifier(C, NC_OBJECT | ND_TRANSFORM, moved);
-        ED_undo_push(C, hand_pick_mode ? "Immersive Hand Pick Place" : "Immersive Object Move");
-        /* One reload on release is enough for hand-pick; mid-drag uses
-         * lightweight active-object transform sync instead. */
-        if (!hand_pick_mode) {
+        ED_undo_push(C, light_sync ? "Immersive Extract Place" : "Immersive Object Move");
+        if (!light_sync) {
           g_wm_ios_muse_geometry_dirty = true;
         }
         else {
@@ -8446,7 +8470,6 @@ static void wm_ios_immersive_muse_object_grab(bContext *C,
         continue;
       }
       Object *cand = base->object;
-      /* Prefer movable scene objects. */
       if (!ELEM(cand->type,
                 OB_MESH,
                 OB_ARMATURE,
@@ -8466,7 +8489,6 @@ static void wm_ios_immersive_muse_object_grab(bContext *C,
       float origin[3];
       copy_v3_v3(origin, cand->object_to_world().location());
       const float d = len_squared_v3v3(muse_world, origin);
-      /* Selected objects get a soft priority (half distance). */
       const float score = (base->flag & BASE_SELECTED) ? d * 0.5f : d;
       if (score < nearest_dist_sq) {
         nearest_dist_sq = score;
@@ -8477,7 +8499,7 @@ static void wm_ios_immersive_muse_object_grab(bContext *C,
     if (nearest == nullptr || nearest_dist_sq > grab_radius_sq) {
       return;
     }
-    if (hand_pick_mode && nearest_base != nullptr) {
+    if (light_sync && nearest_base != nullptr) {
       blender::ed::object::base_activate(C, nearest_base);
     }
     g_wm_ios_obj_grab_ob = nearest;
@@ -8498,8 +8520,6 @@ static void wm_ios_immersive_muse_object_grab(bContext *C,
     return;
   }
 
-  /* Apply as Blender-world translation via full matrix so parent/rotation
-   * cannot remap Immersive up (world Z) onto loc.y. */
   float mat[4][4];
   copy_m4_m4(mat, ob->object_to_world().ptr());
   add_v3_v3(mat[3], delta_world);
@@ -8508,12 +8528,48 @@ static void wm_ios_immersive_muse_object_grab(bContext *C,
 
   DEG_id_tag_update(&ob->id, ID_RECALC_TRANSFORM);
   WM_event_add_notifier(C, NC_OBJECT | ND_TRANSFORM, ob);
-  if (hand_pick_mode) {
+  if (light_sync) {
     const float *wl = ob->object_to_world().location();
     GHOST_IOS_immersive_update_active_object(ob->id.name + 2, wl[0], wl[1], wl[2]);
   }
   else {
     g_wm_ios_muse_geometry_dirty = true;
+  }
+}
+
+static void wm_ios_immersive_extract_follow_tip(bContext *C, Object *ob, const float muse_world[3],
+                                               const bool tip_down)
+{
+  if (ob == nullptr) {
+    return;
+  }
+  if (tip_down) {
+    g_wm_ios_object_extract_seen_tip = true;
+  }
+
+  float mat[4][4];
+  copy_m4_m4(mat, ob->object_to_world().ptr());
+  copy_v3_v3(mat[3], muse_world);
+  BKE_object_apply_mat4(ob, mat, true, true);
+  DEG_id_tag_update(&ob->id, ID_RECALC_TRANSFORM);
+  WM_event_add_notifier(C, NC_OBJECT | ND_TRANSFORM, ob);
+  GHOST_IOS_immersive_update_active_object(
+      ob->id.name + 2, muse_world[0], muse_world[1], muse_world[2]);
+
+  if (g_wm_ios_object_extract_seen_tip && !tip_down) {
+    ED_undo_push(C, "Immersive Extract Place");
+    WM_IOS_immersive_set_object_extract_active(0);
+    /* Place done → enter Sculpt for editing. */
+    g_wm_ios_immersive_ui_mode = 2;
+    if (ob->type == OB_MESH) {
+      if (g_wm_ios_muse_dyntopo_wanted) {
+        if (Mesh *mesh = static_cast<Mesh *>(ob->data)) {
+          mesh->flag |= ME_SCULPT_DYNAMIC_TOPOLOGY;
+        }
+      }
+      blender::ed::object::mode_set(C, OB_MODE_SCULPT);
+    }
+    GHOST_IOS_diag_log("extract place → sculpt");
   }
 }
 
@@ -8763,16 +8819,23 @@ static void wm_ios_immersive_consume_muse(bContext *C, Object *ob)
   CTX_wm_region_set(C, region);
 
   /* Object Mode = Immersive view-only. Do NOT auto-enter Sculpt on tip press;
-   * the hand menu / N-panel must switch to Edit / Sculpt / VPaint explicitly. */
+   * the hand menu / N-panel must switch to Edit / Sculpt / VPaint explicitly.
+   * Prefer Immersive UI mode so sticky Sculpt isn't skipped when Blender's
+   * object mode flag lags a frame (that regression made tip presses no-ops). */
   const bool sculpt_mode = (ob != nullptr) && (ob->mode & OB_MODE_SCULPT);
   const bool edit_mode = (ob != nullptr) && (ob->mode & OB_MODE_EDIT) && (ob->type == OB_MESH);
   const bool vpaint_mode = (ob != nullptr) && (ob->mode & OB_MODE_VERTEX_PAINT) &&
                            (ob->type == OB_MESH);
   const bool pose_mode = (ob != nullptr) && (ob->mode & OB_MODE_POSE) && (ob->type == OB_ARMATURE);
   const bool anim_ui = (g_wm_ios_immersive_ui_mode == 4);
-  const int mode_now = pose_mode   ? 4 :
-                       vpaint_mode ? 3 :
-                       (sculpt_mode ? 2 : (edit_mode ? 1 : 0));
+  const bool want_sculpt = (g_wm_ios_immersive_ui_mode == 2) || sculpt_mode;
+  const bool want_edit = (g_wm_ios_immersive_ui_mode == 1) || edit_mode;
+  const bool want_vpaint = (g_wm_ios_immersive_ui_mode == 3) || vpaint_mode;
+  const int mode_now = anim_ui     ? 4 :
+                       want_vpaint ? 3 :
+                       want_sculpt ? 2 :
+                       want_edit   ? 1 :
+                                     0;
   if (mode_now != g_wm_ios_muse_last_mode) {
     /* Mode switch mid-stroke races USD reload and leaves broken drag state. */
     wm_ios_immersive_muse_cancel_interaction();
@@ -8781,18 +8844,24 @@ static void wm_ios_immersive_consume_muse(bContext *C, Object *ob)
 
   const float co[3] = {sample_x, sample_y, sample_z};
 
-  if (!sculpt_mode && !edit_mode && !vpaint_mode && !pose_mode && !anim_ui) {
-    /* Object Mode: optional hand/Muse pinch grab → place in Immersive. */
-    if (g_wm_ios_object_hand_pick) {
-      g_wm_ios_muse_edit_dragging = false;
-      g_wm_ios_muse_sculpt_dragging = false;
-      g_wm_ios_muse_vpaint_dragging = false;
-      g_wm_ios_pose_dragging = false;
-      wm_ios_immersive_muse_object_grab(C, co, tip_down, true);
-      CTX_wm_area_set(C, area_prev);
-      CTX_wm_region_set(C, region_prev);
-      return;
+  /* Extract session: stick active object to tip, place on release → Sculpt. */
+  if (g_wm_ios_object_extract_active) {
+    g_wm_ios_muse_edit_dragging = false;
+    g_wm_ios_muse_sculpt_dragging = false;
+    g_wm_ios_muse_vpaint_dragging = false;
+    g_wm_ios_pose_dragging = false;
+    g_wm_ios_obj_grab_dragging = false;
+    Object *extract_ob = ob;
+    if (extract_ob == nullptr) {
+      extract_ob = CTX_data_active_object(C);
     }
+    wm_ios_immersive_extract_follow_tip(C, extract_ob, co, tip_down);
+    CTX_wm_area_set(C, area_prev);
+    CTX_wm_region_set(C, region_prev);
+    return;
+  }
+
+  if (!want_sculpt && !want_edit && !want_vpaint && !pose_mode && !anim_ui) {
     CTX_wm_area_set(C, area_prev);
     CTX_wm_region_set(C, region_prev);
     if (g_wm_ios_muse_stroke_active) {
@@ -8804,7 +8873,7 @@ static void wm_ios_immersive_consume_muse(bContext *C, Object *ob)
 
   bool effective_tip_down = tip_down;
   float effective_pressure = pressure;
-  if (g_wm_ios_hand_proximity_sculpt && sculpt_mode) {
+  if (g_wm_ios_hand_proximity_sculpt && want_sculpt) {
     float prox_scale = 0.0f;
     effective_tip_down = wm_ios_immersive_muse_proximity_gate(ob, C, co, &prox_scale);
     effective_pressure = std::max(pressure, 0.15f) * prox_scale;
@@ -8835,25 +8904,44 @@ static void wm_ios_immersive_consume_muse(bContext *C, Object *ob)
       wm_ios_immersive_muse_pose_grab(C, arm_ob, co, tip_down);
     }
   }
-  else if (edit_mode) {
+  else if (want_edit) {
     g_wm_ios_muse_sculpt_dragging = false;
     g_wm_ios_muse_vpaint_dragging = false;
     g_wm_ios_pose_dragging = false;
     g_wm_ios_obj_grab_dragging = false;
+    if (!edit_mode && ob != nullptr && ob->type == OB_MESH) {
+      blender::ed::object::mode_set(C, OB_MODE_EDIT);
+    }
     wm_ios_immersive_muse_edit_verts(C, ob, co, tip_down);
   }
-  else if (sculpt_mode) {
+  else if (want_sculpt) {
     g_wm_ios_muse_edit_dragging = false;
     g_wm_ios_muse_vpaint_dragging = false;
     g_wm_ios_pose_dragging = false;
     g_wm_ios_obj_grab_dragging = false;
-    wm_ios_immersive_muse_sculpt_grab(C, ob, co, effective_tip_down, effective_pressure);
+    Object *sculpt_ob = ob;
+    if (!sculpt_mode && sculpt_ob != nullptr && sculpt_ob->type == OB_MESH) {
+      if (g_wm_ios_muse_dyntopo_wanted) {
+        if (Mesh *mesh = static_cast<Mesh *>(sculpt_ob->data)) {
+          mesh->flag |= ME_SCULPT_DYNAMIC_TOPOLOGY;
+        }
+      }
+      blender::ed::object::mode_set(C, OB_MODE_SCULPT);
+      sculpt_ob = CTX_data_active_object(C);
+    }
+    wm_ios_immersive_muse_sculpt_grab(
+        C, sculpt_ob, co, effective_tip_down, effective_pressure);
   }
-  else if (vpaint_mode) {
+  else if (want_vpaint) {
     g_wm_ios_muse_edit_dragging = false;
     g_wm_ios_muse_sculpt_dragging = false;
     g_wm_ios_obj_grab_dragging = false;
-    wm_ios_immersive_muse_vertex_paint(C, ob, co, tip_down, pressure);
+    Object *paint_ob = ob;
+    if (!vpaint_mode && paint_ob != nullptr && paint_ob->type == OB_MESH) {
+      blender::ed::object::mode_set(C, OB_MODE_VERTEX_PAINT);
+      paint_ob = CTX_data_active_object(C);
+    }
+    wm_ios_immersive_muse_vertex_paint(C, paint_ob, co, tip_down, pressure);
   }
 
   CTX_wm_area_set(C, area_prev);
@@ -9084,24 +9172,41 @@ static void wm_ios_immersive_sync_impl(bContext *C)
   }
 
   std::string pending_name;
+  float pending_x = 0.0f;
+  float pending_y = 0.0f;
   float pending_z = 0.0f;
+  bool pending_has_xyz = false;
   {
     std::lock_guard lock(g_wm_ios_immersive_pending_move.mutex);
     if (g_wm_ios_immersive_pending_move.pending) {
       pending_name = g_wm_ios_immersive_pending_move.object_name;
+      pending_x = g_wm_ios_immersive_pending_move.x;
+      pending_y = g_wm_ios_immersive_pending_move.y;
       pending_z = g_wm_ios_immersive_pending_move.z;
+      pending_has_xyz = g_wm_ios_immersive_pending_move.has_xyz;
       g_wm_ios_immersive_pending_move.pending = false;
     }
   }
 
   const char *object_name = ob->id.name + 2;
   if (!pending_name.empty() && pending_name == object_name) {
-    /* pending_z is Blender *world* Z (Immersive gravity-up). Writing ob->loc[2]
-     * remaps under parents/rotation and made Immersive up diverge from View3D. */
     float mat[4][4];
     copy_m4_m4(mat, ob->object_to_world().ptr());
-    if (mat[3][2] != pending_z) {
+    bool changed = false;
+    if (pending_has_xyz) {
+      if (mat[3][0] != pending_x || mat[3][1] != pending_y || mat[3][2] != pending_z) {
+        mat[3][0] = pending_x;
+        mat[3][1] = pending_y;
+        mat[3][2] = pending_z;
+        changed = true;
+      }
+    }
+    else if (mat[3][2] != pending_z) {
+      /* pending_z is Blender *world* Z (Immersive gravity-up). */
       mat[3][2] = pending_z;
+      changed = true;
+    }
+    if (changed) {
       BKE_object_apply_mat4(ob, mat, true, true);
       DEG_id_tag_update(&ob->id, ID_RECALC_TRANSFORM);
       WM_event_add_notifier(C, NC_OBJECT | ND_TRANSFORM, ob);
@@ -9511,26 +9616,56 @@ static void WM_OT_ios_immersive_set_hand_as_pen(wmOperatorType *ot)
   RNA_def_boolean(ot->srna, "enable", false, "Enable", "Use hand tip as pen");
 }
 
-static wmOperatorStatus wm_ios_immersive_set_object_hand_pick_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus wm_ios_immersive_extract_active_exec(bContext *C, wmOperator * /*op*/)
 {
-  const bool enable = RNA_boolean_get(op->ptr, "enable");
-  WM_IOS_immersive_set_object_hand_pick(enable ? 1 : 0);
+  /* Open Immersive if needed, then start tip-follow extract for the active object. */
+  if (!GHOST_IOS_immersive_space_is_supported()) {
+    GHOST_IOS_show_native_alert(
+        "Immersive Extract",
+        "Native visionOS Immersive Space build required.");
+    return OPERATOR_CANCELLED;
+  }
+
+  Object *ob = CTX_data_active_object(C);
+  if (ob == nullptr) {
+    GHOST_IOS_show_native_alert("Immersive Extract", "No active object to extract.");
+    return OPERATOR_CANCELLED;
+  }
+
+  if (!GHOST_IOS_immersive_mode_is_active()) {
+    char usdz_path[FILE_MAX] = "";
+    BLI_path_join(usdz_path, sizeof(usdz_path), BKE_tempdir_session(), "immersive_preview.usdz");
+    if (!wm_ios_immersive_export_scene(C, usdz_path, true)) {
+      return OPERATOR_CANCELLED;
+    }
+    if (!GHOST_IOS_set_immersive_mode_enabled(true, usdz_path)) {
+      GHOST_IOS_show_native_alert("Immersive Extract", "Could not open Immersive Space.");
+      return OPERATOR_CANCELLED;
+    }
+  }
+
+  /* Object Mode + hand input while placing. */
+  g_wm_ios_immersive_ui_mode = 0;
+  if (ob->type == OB_MESH && (ob->mode & OB_MODE_OBJECT) == 0) {
+    blender::ed::object::mode_set(C, OB_MODE_OBJECT);
+  }
+  WM_IOS_immersive_set_hand_as_pen(1);
+  WM_IOS_immersive_set_object_extract_active(1);
+  g_wm_ios_sync_transforms_to_space = true;
+
+  GHOST_IOS_diag_log("extract: follow tip until pinch release → sculpt");
   WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
-  char buf[72];
-  SNPRINTF(buf, "object hand-pick: %s", enable ? "ON" : "OFF");
-  GHOST_IOS_diag_log(buf);
   return OPERATOR_FINISHED;
 }
 
-static void WM_OT_ios_immersive_set_object_hand_pick(wmOperatorType *ot)
+static void WM_OT_ios_immersive_extract_active(wmOperatorType *ot)
 {
-  ot->name = "Immersive Object Hand Pick";
-  ot->idname = "WM_OT_ios_immersive_set_object_hand_pick";
+  ot->name = "Extract Active to Immersive";
+  ot->idname = "WM_OT_ios_immersive_extract_active";
   ot->description =
-      "In Object Mode, pinch near an object origin to grab and place it in Immersive Space";
-  ot->exec = wm_ios_immersive_set_object_hand_pick_exec;
+      "Open Immersive Space, pull the active object to your hand tip, then enter Sculpt on release";
+  ot->exec = wm_ios_immersive_extract_active_exec;
   ot->poll = wm_ios_immersive_poll;
-  RNA_def_boolean(ot->srna, "enable", false, "Enable", "Grab and place objects by pinch");
 }
 
 static wmOperatorStatus wm_ios_immersive_set_hand_proximity_sculpt_exec(bContext *C, wmOperator *op)
@@ -9746,7 +9881,7 @@ void wm_operatortypes_register()
 #if defined(WITH_APPLE_CROSSPLATFORM)
   WM_operatortype_append(WM_OT_ios_immersive_toggle);
   WM_operatortype_append(WM_OT_ios_immersive_set_hand_as_pen);
-  WM_operatortype_append(WM_OT_ios_immersive_set_object_hand_pick);
+  WM_operatortype_append(WM_OT_ios_immersive_extract_active);
   WM_operatortype_append(WM_OT_ios_immersive_set_hand_proximity_sculpt);
   WM_operatortype_append(WM_OT_ios_immersive_set_strength);
   WM_operatortype_append(WM_OT_ios_immersive_set_radius);

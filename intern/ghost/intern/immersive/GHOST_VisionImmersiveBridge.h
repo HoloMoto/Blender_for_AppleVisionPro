@@ -90,6 +90,7 @@ void GHOST_Vision_update_anim_timeline(int frame,
 
 /** Use right-hand pinch instead of Muse stylus. */
 void GHOST_Vision_set_use_hand_as_pen(bool enable);
+void GHOST_Vision_set_object_extract_active(bool enable);
 
 /** Toggle spatial shader-node overlay visibility. */
 void GHOST_Vision_set_shader_space_enabled(bool enable);

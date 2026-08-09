@@ -19,6 +19,10 @@ import simd
   private func WM_IOS_immersive_set_object_z(
     _ objectName: UnsafePointer<CChar>, _ z: Float)
 
+  @_silgen_name("WM_IOS_immersive_set_object_world_location")
+  private func WM_IOS_immersive_set_object_world_location(
+    _ objectName: UnsafePointer<CChar>, _ x: Float, _ y: Float, _ z: Float)
+
   @_silgen_name("GHOST_IOS_immersive_muse_tick_set_enabled")
   private func GHOST_IOS_immersive_muse_tick_set_enabled(_ enable: Bool)
 
@@ -322,6 +326,29 @@ import simd
       isDragging = false
     }
 
+    /** Free 3-axis place (extract-from-viewport): follow hand in parent space. */
+    func dragChangedFree(hitEntity: Entity, locationInParent: SIMD3<Float>) {
+      guard let activeEntity, belongsToActiveEntity(hitEntity) else { return }
+      guard let worldRoot else { return }
+
+      if dragStartLocation == nil {
+        dragStartLocation = locationInParent
+        dragStartEntityPosition = activeEntity.position
+        isDragging = true
+      }
+      guard let dragStartLocation else { return }
+
+      let delta = locationInParent - dragStartLocation
+      activeEntity.position = dragStartEntityPosition + delta
+      let rkWorld = activeEntity.convert(position: .zero, to: worldRoot)
+      let blender = BlenderImmersiveCoords.realityKitToBlender(rkWorld)
+      blenderBaseLocation = blender
+      entityBasePosition = activeEntity.position
+      activeObjectName.withCString {
+        WM_IOS_immersive_set_object_world_location($0, blender.x, blender.y, blender.z)
+      }
+    }
+
     private func selectActiveEntity(
       name: String,
       blenderLocation: SIMD3<Float>,
@@ -573,11 +600,22 @@ import simd
                 return
               }
             }
-            /* Object Mode = view-only. Anim/Pose = bone grab only (no mesh drag). */
-            guard handMenuMode != 0 && handMenuMode != 4 else { return }
+            /* Mesh RealityKit drag:
+             * - Edit (1): allow (legacy Z drag)
+             * - Object (0) + extract-place: allow full pull/place
+             * - Sculpt (2) / VPaint (3): NEVER — pinch belongs to the brush
+             * - Anim (4): bone/object grab is Muse-sampled, not this gesture */
+            let extractPlace = BlenderImmersiveState.shared.objectExtractActive
+            let allowMeshDrag = (handMenuMode == 1) || (handMenuMode == 0 && extractPlace)
+            guard allowMeshDrag else { return }
             guard let parent = objectSync.dragParent(for: value.entity) else { return }
             let location = value.convert(value.location3D, from: .local, to: parent)
-            objectSync.dragChanged(hitEntity: value.entity, locationInParent: location)
+            if extractPlace && handMenuMode == 0 {
+              objectSync.dragChangedFree(hitEntity: value.entity, locationInParent: location)
+            }
+            else {
+              objectSync.dragChanged(hitEntity: value.entity, locationInParent: location)
+            }
           }
           .onEnded { value in
             if shaderSpaceEnabled && shaderOverlay.isInteractive {

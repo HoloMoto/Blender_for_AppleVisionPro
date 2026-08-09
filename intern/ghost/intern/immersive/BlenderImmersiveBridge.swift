@@ -178,6 +178,14 @@ public final class BlenderImmersiveBridge: NSObject {
     #endif
   }
 
+  @objc public static func setObjectExtractActive(_ enable: Bool) {
+    #if os(visionOS)
+      DispatchQueue.main.async {
+        BlenderImmersiveState.shared.applyObjectExtractActive(enable)
+      }
+    #endif
+  }
+
   @objc public static func multiuserHost(_ displayName: String?) -> Bool {
     #if os(visionOS)
       return BlenderImmersiveMultiuserSession.shared.hostSession(displayName: displayName)

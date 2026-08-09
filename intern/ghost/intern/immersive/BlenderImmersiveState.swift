@@ -73,6 +73,8 @@ public extension Notification.Name {
   @objc public private(set) var handMenuDyntopo: Bool = true
   /** Right-hand pinch substitutes for Muse stylus. */
   @objc public private(set) var useHandAsPen: Bool = false
+  /** Pull-from-viewport extract session (Object Mode free drag enabled). */
+  @objc public private(set) var objectExtractActive: Bool = false
   /** Hand input trigger mode: true = proximity, false = pinch. */
   @objc public private(set) var handProximitySculpt: Bool = false
 
@@ -147,6 +149,12 @@ public extension Notification.Name {
   @objc public func applyUseHandAsPen(_ enable: Bool) {
     useHandAsPen = enable
     NotificationCenter.default.post(name: .blenderImmersiveHandAsPenChanged, object: nil)
+  }
+
+  @objc public func applyObjectExtractActive(_ enable: Bool) {
+    if objectExtractActive == enable { return }
+    objectExtractActive = enable
+    NotificationCenter.default.post(name: .blenderImmersiveActiveChanged, object: nil)
   }
 
   @objc public func updateActiveObject(_ name: String?, x: Float, y: Float, z: Float) {

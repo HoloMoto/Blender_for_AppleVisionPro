@@ -217,6 +217,7 @@ extern void GHOST_IOS_immersive_update_anim_timeline(int frame,
 /** Use right-hand pinch as Muse pen substitute in Immersive Space. */
 extern void GHOST_IOS_immersive_set_use_hand_as_pen(bool enable);
 extern bool GHOST_IOS_immersive_get_use_hand_as_pen(void);
+extern void GHOST_IOS_immersive_set_object_extract_active(bool enable);
 /** Toggle spatial shader-node overlay (visionOS). */
 extern void GHOST_IOS_immersive_set_shader_space_enabled(bool enable);
 /**
