@@ -8997,6 +8997,98 @@ static void wm_ios_immersive_consume_muse(bContext *C, Object *ob)
   }
 }
 
+/**
+ * Shared default material for Immersive USD export when a mesh has no / null
+ * slots. Prevents RealityKit from loading entities with empty materials.
+ */
+static Material *wm_ios_immersive_base_material_ensure(bContext *C)
+{
+  Main *bmain = CTX_data_main(C);
+  if (bmain == nullptr) {
+    return nullptr;
+  }
+  LISTBASE_FOREACH (Material *, ma, &bmain->materials) {
+    if (STREQ(ma->id.name + 2, "VisionOSBase")) {
+      return ma;
+    }
+  }
+  Material *ma = BKE_material_add(bmain, "VisionOSBase");
+  if (ma == nullptr) {
+    return nullptr;
+  }
+  ED_node_shader_default(C, &ma->id);
+  ma->use_nodes = true;
+  if (ma->nodetree != nullptr) {
+    BKE_ntree_update_after_single_tree_change(*bmain, *ma->nodetree);
+  }
+  /* Neutral gray viewport tint (visible even if PreviewSurface is thin). */
+  ma->r = 0.72f;
+  ma->g = 0.72f;
+  ma->b = 0.72f;
+  DEG_id_tag_update(&ma->id, ID_RECALC_SHADING);
+  fprintf(stderr, "[immersive] created base material 'VisionOSBase'\n");
+  fflush(stderr);
+  return ma;
+}
+
+/** Assign VisionOSBase to mesh objects with no materials or empty slots. */
+static void wm_ios_immersive_ensure_mesh_materials(bContext *C)
+{
+  Main *bmain = CTX_data_main(C);
+  Scene *scene = CTX_data_scene(C);
+  ViewLayer *view_layer = CTX_data_view_layer(C);
+  if (bmain == nullptr || scene == nullptr || view_layer == nullptr) {
+    return;
+  }
+  Material *base = wm_ios_immersive_base_material_ensure(C);
+  if (base == nullptr) {
+    return;
+  }
+  BKE_view_layer_synced_ensure(scene, view_layer);
+  ListBase *bases = BKE_view_layer_object_bases_get(view_layer);
+  int assigned = 0;
+  for (Base *base_ptr = static_cast<Base *>(bases->first); base_ptr != nullptr;
+       base_ptr = base_ptr->next)
+  {
+    Object *ob = base_ptr->object;
+    if (ob == nullptr || ob->type != OB_MESH) {
+      continue;
+    }
+    if ((base_ptr->flag & BASE_ENABLED_AND_MAYBE_VISIBLE_IN_VIEWPORT) == 0) {
+      continue;
+    }
+    if (ob->totcol == 0) {
+      BKE_object_material_assign(bmain, ob, base, 1, BKE_MAT_ASSIGN_OBDATA);
+      assigned++;
+      DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
+      continue;
+    }
+    bool touched = false;
+    for (short slot = 1; slot <= ob->totcol; slot++) {
+      Material *slot_ma = BKE_object_material_get(ob, slot);
+      if (slot_ma == nullptr) {
+        BKE_object_material_assign(bmain, ob, base, slot, BKE_MAT_ASSIGN_OBDATA);
+        assigned++;
+        touched = true;
+      }
+      else {
+        /* Repair pink/orphan nodetrees so USD PreviewSurface is non-empty. */
+        if (wm_ios_shader_repair_material(C, slot_ma, false)) {
+          touched = true;
+        }
+      }
+    }
+    if (touched) {
+      DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
+    }
+  }
+  if (assigned > 0) {
+    char buf[96];
+    SNPRINTF(buf, "immersive: filled %d empty material slot(s) with VisionOSBase", assigned);
+    GHOST_IOS_diag_log(buf);
+  }
+}
+
 static bool wm_ios_immersive_export_scene(bContext *C,
                                           const char *usdz_path,
                                           const bool show_error)
@@ -9010,6 +9102,9 @@ static bool wm_ios_immersive_export_scene(bContext *C,
     }
     return false;
   }
+
+  /* Bind a default material before USD export so RealityKit never sees null. */
+  wm_ios_immersive_ensure_mesh_materials(C);
 
   if (BLI_exists(usdz_path)) {
     BLI_delete(usdz_path, false, false);

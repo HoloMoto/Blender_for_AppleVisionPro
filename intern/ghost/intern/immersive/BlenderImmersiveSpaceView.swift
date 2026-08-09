@@ -877,6 +877,10 @@ import simd
       }
 
       newEntity.name = "BlenderImmersiveUSD"
+      /* USD with no MaterialBinding (totcol==0 / empty slots) arrives with an
+       * empty ModelComponent.materials — fill a neutral base so Immersive never
+       * shows null/pink missing materials. */
+      Self.ensureBaseMaterials(on: newEntity)
       /* USD exports Blender units as meters. Keep the authored scale exactly:
        * the default 2x2x2 cube must appear as a 2-meter cube in visionOS.
        * Placement lives on worldRoot — leave the USD file root at identity. */
@@ -895,6 +899,30 @@ import simd
       /* visionOS 27+: BloomComponent on emissive meshes (hierarchical). */
       BlenderImmersiveBloom.apply(worldRoot: worldRoot, sceneRoot: newEntity)
       lightModelReload = false
+    }
+
+    /** Neutral base for USD meshes that shipped with no bound material. */
+    private static func makeImmersiveBaseMaterial() -> SimpleMaterial {
+      SimpleMaterial(color: UIColor(white: 0.72, alpha: 1.0), isMetallic: false)
+    }
+
+    private static func ensureBaseMaterials(on root: Entity) {
+      let base = makeImmersiveBaseMaterial()
+      var patched = 0
+      func visit(_ entity: Entity) {
+        if var model = entity.components[ModelComponent.self], model.materials.isEmpty {
+          model.materials = [base]
+          entity.components.set(model)
+          patched += 1
+        }
+        for child in entity.children {
+          visit(child)
+        }
+      }
+      visit(root)
+      if patched > 0 {
+        print("[immersive] Applied base material to \(patched) mesh(es) with empty materials")
+      }
     }
 
   }
