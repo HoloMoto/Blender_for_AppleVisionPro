@@ -90,7 +90,7 @@ import UIKit
           return
         }
         let ref = ReferenceImage(
-          cgImage: cgImage,
+          cgimage: cgImage,
           physicalSize: CGSize(
             width: CGFloat(Self.markerPhysicalWidthMeters),
             height: CGFloat(Self.markerPhysicalWidthMeters)),
