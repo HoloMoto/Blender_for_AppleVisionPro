@@ -90,6 +90,12 @@ public final class BlenderImmersiveMultiuserSession: NSObject {
   /** Optional MainActor hook so Immersive can react to remote anchor messages. */
   @MainActor public var onRemoteSharedAnchor: ((String, Bool) -> Void)?
 
+  /**
+   * iPad (or peer) ARKit device pose: column-major 4×4 = T_ipadWorld←device.
+   * Used by spectator Plan A alignment.
+   */
+  @MainActor public var onRemoteIpadPose: ((simd_float4x4) -> Void)?
+
   private var colorSeed: SIMD3<Float> = SIMD3(0.2, 0.7, 1.0)
   private var remotePresence: [String: BlenderImmersiveRemotePresence] = [:]
   private var lastPresenceSend: TimeInterval = 0
@@ -304,6 +310,12 @@ public final class BlenderImmersiveMultiuserSession: NSObject {
       let name = (obj["name"] as? String) ?? peer.displayName
       statusText = isHost ? "Hosting (\(peerCount) peer)" : "Joined \(name)"
       publishChanged()
+    case "ipadPose":
+      if let m = float4x4FromJSON(obj["m"]) {
+        DispatchQueue.main.async { [weak self] in
+          self?.onRemoteIpadPose?(m)
+        }
+      }
     case "presence":
       let uid = (obj["uid"] as? String) ?? peer.displayName
       if uid == localPeerUUID {
@@ -386,6 +398,23 @@ public final class BlenderImmersiveMultiuserSession: NSObject {
       return f
     }
     return 0
+  }
+
+  /** Column-major 16 floats → simd_float4x4. */
+  private func float4x4FromJSON(_ any: Any?) -> simd_float4x4? {
+    guard let arr = any as? [Any], arr.count >= 16 else { return nil }
+    var cols = [SIMD4<Float>]()
+    cols.reserveCapacity(4)
+    for c in 0..<4 {
+      let o = c * 4
+      cols.append(
+        SIMD4(
+          floatValue(arr[o]),
+          floatValue(arr[o + 1]),
+          floatValue(arr[o + 2]),
+          floatValue(arr[o + 3])))
+    }
+    return simd_float4x4(columns: (cols[0], cols[1], cols[2], cols[3]))
   }
 
   private func intValue(_ any: Any?) -> Int {

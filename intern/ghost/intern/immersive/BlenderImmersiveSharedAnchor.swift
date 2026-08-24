@@ -160,13 +160,22 @@ import simd
      * WorldAnchor at the current worldRoot pose.
      */
     func alignHere() async {
-      await start()
-      guard isRunning, let root = worldRoot else {
+      guard let root = worldRoot else {
         statusText = "Anchor: Immersive 未準備"
         publish()
         return
       }
-      let transform = root.transformMatrix(relativeTo: nil)
+      await alignAtTransform(root.transformMatrix(relativeTo: nil), label: "ここに合わせた")
+    }
+
+    /** Pin WorldAnchor at an absolute Vision Pro transform (e.g. iPad marker lock). */
+    func alignAtTransform(_ transform: simd_float4x4, label: String = "外部合わせ完了") async {
+      await start()
+      guard isRunning else {
+        statusText = "Anchor: Immersive 未準備"
+        publish()
+        return
+      }
       do {
         let anchor = WorldAnchor(originFromAnchorTransform: transform)
         try await worldProvider.addAnchor(anchor)
@@ -176,7 +185,7 @@ import simd
         anchorIDString = anchor.id.uuidString
         hasWorldOrigin = true
         pendingAdoptID = nil
-        statusText = "Anchor: ここに合わせた"
+        statusText = "Anchor: \(label)"
         publish()
       }
       catch {

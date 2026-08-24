@@ -220,6 +220,7 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
           intern/immersive/BlenderImmersiveShaderOverlay.swift
           intern/immersive/BlenderImmersiveMultiuser.swift
           intern/immersive/BlenderImmersiveSharedAnchor.swift
+          intern/immersive/BlenderImmersiveSpectatorAlign.swift
           intern/immersive/BlenderImmersiveSpaceView.swift
           intern/immersive/BlenderIOSDiagnosticLog.swift
           intern/immersive/BlenderVisionApp.swift

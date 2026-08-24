@@ -100,6 +100,10 @@ import UIKit
     @State private var multiuserStatus = "Idle"
     @State private var multiuserActive = false
     @State private var multiuserHost = false
+    @State private var spectatorStatus = "iPad合わせ: 待機"
+    @State private var spectatorTracking = false
+    @State private var spectatorMarkerVisible = false
+    @State private var spectatorLocked = false
     @State private var anchorStatus = "Anchor: 未設定"
     @State private var shaderSpace = BlenderImmersiveState.shared.shaderSpaceEnabled
     @State private var shaderMaterialName = BlenderImmersiveState.shared.shaderMaterialName
@@ -173,6 +177,10 @@ import UIKit
       .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveSharedAnchorChanged)) {
         _ in
         refreshAnchor()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveSpectatorAlignChanged))
+      { _ in
+        refreshSpectator()
       }
       .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveActiveChanged)) { _ in
         immersiveActive = BlenderImmersiveState.shared.isActive
@@ -677,6 +685,38 @@ import UIKit
         .tint(.purple)
         .disabled(!multiuserActive || multiuserHost)
       }
+
+      Divider()
+      Text("iPad スペクテーター合わせ")
+        .font(.caption.weight(.semibold))
+      Text(spectatorStatus)
+        .font(.caption2)
+        .lineLimit(3)
+      HStack(spacing: 6) {
+        Button(spectatorTracking ? "捜索停止" : "マーカー捜索") {
+          Task {
+            if BlenderImmersiveSpectatorAlignController.shared.isTracking {
+              BlenderImmersiveSpectatorAlignController.shared.stopTracking()
+            }
+            else {
+              await BlenderImmersiveSpectatorAlignController.shared.startTracking()
+            }
+            refreshSpectator()
+          }
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(spectatorTracking ? .red.opacity(0.85) : .teal)
+        Button("ロック") {
+          Task {
+            await BlenderImmersiveSpectatorAlignController.shared.lockAlignment()
+            refreshSpectator()
+            refreshAnchor()
+          }
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.mint)
+        .disabled(!spectatorMarkerVisible && !spectatorLocked)
+      }
     }
 
     private func placementSlider(
@@ -753,6 +793,7 @@ import UIKit
       syncAnim()
       refreshMultiuser()
       refreshAnchor()
+      refreshSpectator()
       immersiveActive = BlenderImmersiveState.shared.isActive
       originX = BlenderImmersiveState.shared.placementX
       originHeight = BlenderImmersiveState.shared.placementY
@@ -798,6 +839,14 @@ import UIKit
       if let anchor = BlenderImmersiveState.shared.sharedAnchor {
         anchorStatus = anchor.statusText
       }
+    }
+
+    private func refreshSpectator() {
+      let s = BlenderImmersiveSpectatorAlignController.shared
+      spectatorStatus = s.statusText
+      spectatorTracking = s.isTracking
+      spectatorMarkerVisible = s.markerVisible
+      spectatorLocked = s.locked
     }
   }
 
