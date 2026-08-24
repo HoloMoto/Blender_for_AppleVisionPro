@@ -32,10 +32,16 @@
  */
 
 #include <cstring>
+#include <cstdint>
 #include <string>
 #include <string_view>
 
 #include "BLI_span.hh"
+
+#if defined(WITH_APPLE_CROSSPLATFORM) && defined(__APPLE__)
+#  include <mach/mach.h>
+#  include <mach/vm_map.h>
+#endif
 
 namespace blender {
 
@@ -135,7 +141,7 @@ class StringRefNull : public StringRefBase {
   constexpr StringRefNull();
   constexpr StringRefNull(const char *str, int64_t size);
   StringRefNull(std::nullptr_t) = delete;
-  constexpr StringRefNull(const char *str);
+  StringRefNull(const char *str);
   StringRefNull(const std::string &str);
 
   constexpr char operator[](int64_t index) const;
@@ -448,11 +454,44 @@ constexpr StringRefNull::StringRefNull(const char *str, const int64_t size)
  * Construct a StringRefNull from a null terminated c-string. The pointer must not point to
  * NULL.
  */
-constexpr StringRefNull::StringRefNull(const char *str)
-    : StringRefBase(str, int64_t(std::char_traits<char>::length(str)))
+static inline int64_t stringrefnull_safe_cstr_length(const char *str)
 {
+  if (str == nullptr || uintptr_t(str) < 4096) {
+    return 0;
+  }
+#if defined(WITH_APPLE_CROSSPLATFORM) && defined(__APPLE__)
+  constexpr vm_size_t kChunkSize = 32;
+  constexpr int64_t kMaxScanBytes = 1 << 20;
+  char chunk[kChunkSize];
+  for (int64_t offset = 0; offset < kMaxScanBytes; offset += kChunkSize) {
+    vm_size_t out_size = kChunkSize;
+    const kern_return_t kr = vm_read_overwrite(mach_task_self(),
+                                               reinterpret_cast<vm_address_t>(str + offset),
+                                               kChunkSize,
+                                               reinterpret_cast<vm_address_t>(chunk),
+                                               &out_size);
+    if (kr != KERN_SUCCESS || out_size != kChunkSize) {
+      return 0;
+    }
+    for (vm_size_t i = 0; i < kChunkSize; i++) {
+      if (chunk[i] == '\0') {
+        return offset + int64_t(i);
+      }
+    }
+  }
+  return 0;
+#else
+  return int64_t(std::char_traits<char>::length(str));
+#endif
+}
+
+inline StringRefNull::StringRefNull(const char *str)
+    : StringRefBase(str ? str : "", stringrefnull_safe_cstr_length(str))
+{
+#if !defined(WITH_APPLE_CROSSPLATFORM)
   BLI_assert(str != nullptr);
-  BLI_assert(data_[size_] == '\0');
+#endif
+  BLI_assert(data_ != nullptr);
 }
 
 /**

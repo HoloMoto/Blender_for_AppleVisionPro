@@ -11,6 +11,13 @@ _StructRNA = _types.bpy_struct
 _StructMetaPropGroup = _types.bpy_struct_meta_idprop
 # StructRNA = _types.Struct
 
+# iOS bootstrap can temporarily miss RNA base types during early startup.
+# Provide a minimal fallback so module import can continue.
+if not hasattr(_types, "ID"):
+    class _BpyFallbackID(_StructRNA):
+        __slots__ = ()
+    _types.ID = _BpyFallbackID
+
 # Private dummy object use for comparison only.
 _sentinel = object()
 

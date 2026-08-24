@@ -26,6 +26,7 @@ endfunction()
 # Apple cross-platform device build config
 if(WITH_APPLE_CROSSPLATFORM)
   # Disable modules with no planned/required support on iOS.
+  set(WITH_USD OFF CACHE BOOL "Disable until we fix issue with release build" FORCE)
   set(NO_PLATFORM_SUPPORT_MSG "Auto disabled as APPLE_TARGET_DEVICE=ios")
   set(WITH_VULKAN_BACKEND  OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
   set(WITH_OPENGL_BACKEND  OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
@@ -41,7 +42,7 @@ if(WITH_APPLE_CROSSPLATFORM)
   #       (Set DPXR_ENABLE_METAL_SUPPORT=ON in usd.cmake for WITH_APPLE_CROSSPLATFORM platform)
   set(WITH_HYDRA  OFF CACHE BOOL "Auto disabled due to lack of HgI/Hydra Storm for Metal on iOS" FORCE)
   set(WITH_CYCLES_OSL OFF CACHE BOOL "Support for build time compilation of OSL Shaders not supported yet on iOS" FORCE)
-  # Cycles: Metal is the only GPU backend on iOS.
+  # Cycles: enable engine with Metal; no CUDA/OptiX/HIP/oneAPI on iOS. CPU path still uses TBB/Embree from LIBDIR.
   set(WITH_CYCLES ON CACHE BOOL "Enable Cycles render engine" FORCE)
   set(WITH_CYCLES_DEVICE_METAL ON CACHE BOOL "Cycles: Metal device (primary on iOS)" FORCE)
   set(WITH_CYCLES_DEVICE_CUDA OFF CACHE BOOL "NVIDIA not available on iOS" FORCE)
@@ -58,27 +59,10 @@ if(WITH_APPLE_CROSSPLATFORM)
 
   if(NOT BLENDER_IOS_HOST_TOOLS_DIR)
     get_filename_component(_blender_repo "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
-    # Prefer host tools built with the same WITH_* flags as the iOS target.
-    set(_blender_ios_host_tools_candidates
-      "${_blender_repo}/build_ios/build_darwin_tools/bin"
-      "${_blender_repo}/build_darwin_clean/bin"
-      "${_blender_repo}/build_macos_tools/bin")
-    set(_blender_ios_host_tools_default "")
-    foreach(_host_tools_dir IN LISTS _blender_ios_host_tools_candidates)
-      if(EXISTS "${_host_tools_dir}/makesrna" AND EXISTS "${_host_tools_dir}/makesdna")
-        set(_blender_ios_host_tools_default "${_host_tools_dir}")
-        break()
-      endif()
-    endforeach()
-    if(_blender_ios_host_tools_default STREQUAL "")
-      set(_blender_ios_host_tools_default "${_blender_repo}/build_ios/build_darwin_tools/bin")
-    endif()
-    set(BLENDER_IOS_HOST_TOOLS_DIR "${_blender_ios_host_tools_default}" CACHE PATH
-      "Directory with macOS host executables: makesdna, makesrna, datatoc, glsl_preprocess, msgfmt. \
-Must be built with the same WITH_* feature flags as the iOS target (see build_ios/build_darwin_tools).")
+    set(BLENDER_IOS_HOST_TOOLS_DIR "${_blender_repo}/build_darwin_clean/bin" CACHE PATH
+      "Directory with macOS host executables: makesdna, makesrna, datatoc, glsl_preprocess. \
+Build Blender once with APPLE_TARGET_DEVICE=macos, or adjust this path.")
     unset(_blender_repo)
-    unset(_blender_ios_host_tools_candidates)
-    unset(_blender_ios_host_tools_default)
   endif()
 
   add_executable(makesdna IMPORTED GLOBAL)
@@ -91,67 +75,21 @@ Must be built with the same WITH_* feature flags as the iOS target (see build_io
   set_property(TARGET glsl_preprocess PROPERTY IMPORTED_LOCATION "${BLENDER_IOS_HOST_TOOLS_DIR}/glsl_preprocess")
 
   add_executable(msgfmt IMPORTED GLOBAL)
-  set(_blender_ios_msgfmt_path "")
-  if(EXISTS "${BLENDER_IOS_HOST_TOOLS_DIR}/msgfmt")
-    set(_blender_ios_msgfmt_path "${BLENDER_IOS_HOST_TOOLS_DIR}/msgfmt")
+  find_program(_blender_ios_msgfmt NAMES msgfmt PATHS /usr/bin /opt/homebrew/bin /usr/local/bin)
+  if(_blender_ios_msgfmt)
+    set_property(TARGET msgfmt PROPERTY IMPORTED_LOCATION "${_blender_ios_msgfmt}")
   else()
-    get_filename_component(_blender_repo "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
-    foreach(_msgfmt_candidate
-        "${_blender_repo}/build_ios/build_darwin_tools/bin/msgfmt"
-        "${_blender_repo}/build_macos_tools/bin/msgfmt")
-      if(EXISTS "${_msgfmt_candidate}")
-        set(_blender_ios_msgfmt_path "${_msgfmt_candidate}")
-        break()
-      endif()
-    endforeach()
-    unset(_blender_repo)
-    unset(_msgfmt_candidate)
+    set_property(TARGET msgfmt PROPERTY IMPORTED_LOCATION "/usr/bin/true")
   endif()
-
-  if(_blender_ios_msgfmt_path)
-    set_property(TARGET msgfmt PROPERTY IMPORTED_LOCATION "${_blender_ios_msgfmt_path}")
-    message(STATUS "iOS msgfmt: ${_blender_ios_msgfmt_path}")
-  else()
-    find_program(_blender_ios_msgfmt NAMES msgfmt PATHS /usr/bin /opt/homebrew/bin /usr/local/bin)
-    if(_blender_ios_msgfmt)
-      # Blender's msgfmt uses "input.po output.mo"; GNU gettext uses "-o output.mo".
-      set(_blender_ios_msgfmt_wrapper "${CMAKE_BINARY_DIR}/blender_msgfmt_wrapper.sh")
-      file(WRITE "${_blender_ios_msgfmt_wrapper}"
-        "#!/bin/sh\nexec \"${_blender_ios_msgfmt}\" \"$1\" -o \"$2\"\n")
-      file(CHMOD "${_blender_ios_msgfmt_wrapper}" FILE_PERMISSIONS
-        OWNER_READ OWNER_WRITE OWNER_EXECUTE
-        GROUP_READ GROUP_EXECUTE
-        WORLD_READ WORLD_EXECUTE)
-      set_property(TARGET msgfmt PROPERTY IMPORTED_LOCATION "${_blender_ios_msgfmt_wrapper}")
-      message(STATUS "iOS msgfmt: GNU wrapper around ${_blender_ios_msgfmt}")
-    else()
-      set_property(TARGET msgfmt PROPERTY IMPORTED_LOCATION "/usr/bin/true")
-      message(WARNING "iOS msgfmt not found; locale catalogs will not be generated")
-    endif()
-    unset(_blender_ios_msgfmt)
-    unset(_blender_ios_msgfmt_wrapper)
-  endif()
-  unset(_blender_ios_msgfmt_path)
+  unset(_blender_ios_msgfmt)
 
   message(STATUS "iOS host tools directory: ${BLENDER_IOS_HOST_TOOLS_DIR}")
-  if(BLENDER_IOS_HOST_TOOLS_DIR MATCHES "build_darwin_clean")
+  if(NOT EXISTS "${BLENDER_IOS_HOST_TOOLS_DIR}/makesdna")
     message(
       WARNING
-      "BLENDER_IOS_HOST_TOOLS_DIR points at build_darwin_clean. "
-      "Host tools must match iOS WITH_* flags (e.g. WITH_INPUT_NDOF=OFF). "
-      "Prefer build_ios/build_darwin_tools/bin instead."
+      "Missing host tool: \"${BLENDER_IOS_HOST_TOOLS_DIR}/makesdna\". Build macOS Blender first or set BLENDER_IOS_HOST_TOOLS_DIR."
     )
   endif()
-  foreach(_host_tool makesdna makesrna datatoc glsl_preprocess)
-    if(NOT EXISTS "${BLENDER_IOS_HOST_TOOLS_DIR}/${_host_tool}")
-      message(
-        WARNING
-        "Missing host tool: \"${BLENDER_IOS_HOST_TOOLS_DIR}/${_host_tool}\". "
-        "Build macOS Blender first or set -DBLENDER_IOS_HOST_TOOLS_DIR=..."
-      )
-    endif()
-  endforeach()
-  unset(_host_tool)
 else()
   # Disable cross-compiled tools (glsl_preprocess, makesdna, makesrna etc.) if building on host.
   set(WITH_CROSSCOMPILED_TOOLS OFF CACHE BOOL "" FORCE)
@@ -218,18 +156,6 @@ if(FIRST_RUN)
 endif()
 
 message(STATUS "Searching pre-compiled LIBDIR: ${LIBDIR}")
-
-if(WITH_APPLE_CROSSPLATFORM)
-  if(EXISTS "${LIBDIR}/usd/lib/libusd_ms.dylib")
-    set(WITH_USD ON CACHE BOOL "Enable USD/USDZ import and export on iOS" FORCE)
-    set(WITH_MATERIALX ON CACHE BOOL "MaterialX is required by USD on iOS" FORCE)
-    message(STATUS "iOS USD: enabled (libusd_ms.dylib found in ${LIBDIR}/usd/lib)")
-    message(STATUS "iOS USD: rebuild host tools with -DWITH_USD=ON if makesrna/makesdna RNA mismatches occur")
-  else()
-    set(WITH_USD OFF CACHE BOOL "USD precompiled libraries not found in LIBDIR" FORCE)
-    message(WARNING "iOS USD: disabled (expected ${LIBDIR}/usd/lib/libusd_ms.dylib)")
-  endif()
-endif()
 
 # Avoid searching for headers since this would otherwise override our lib
 # directory as well as PYTHON_ROOT_DIR.
@@ -308,9 +234,6 @@ endif()
 add_bundled_libraries(usd/lib)
 
 if(WITH_MATERIALX)
-  if(EXISTS "${LIBDIR}/materialx/lib/cmake/MaterialX")
-    set(MaterialX_DIR ${LIBDIR}/materialx/lib/cmake/MaterialX)
-  endif()
   find_package(MaterialX)
   set_and_warn_library_found("MaterialX" MaterialX_FOUND WITH_MATERIALX)
 endif()
@@ -347,6 +270,18 @@ endif()
 
 if(WITH_PYTHON)
   if(NOT (WITH_PYTHON_MODULE AND PYTHON_ROOT_DIR))
+    # iOS: use precompiled static Python from LIBDIR (FindPythonLibsUnix otherwise searches host paths).
+    if(WITH_APPLE_CROSSPLATFORM AND DEFINED LIBDIR)
+      set(_ios_python_ver "3.11")
+      if(DEFINED CACHE{PYTHON_VERSION} AND NOT "${PYTHON_VERSION}" STREQUAL "")
+        set(_ios_python_ver "${PYTHON_VERSION}")
+      endif()
+      set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython${_ios_python_ver}.a" CACHE FILEPATH "" FORCE)
+      set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python${_ios_python_ver}" CACHE PATH "" FORCE)
+      set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python${_ios_python_ver}" CACHE PATH "" FORCE)
+      set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
+      unset(_ios_python_ver)
+    endif()
     find_package(PythonLibsUnix REQUIRED)
   endif()
 endif()
@@ -416,7 +351,7 @@ string(APPEND PLATFORM_CFLAGS " -pipe -funsigned-char -fno-strict-aliasing -ffp-
 if(WITH_APPLE_CROSSPLATFORM)
   # Link different frameworks for iOS
   set(PLATFORM_LINKFLAGS
-    "-fexceptions -framework CoreServices -framework Foundation -framework IOKit -framework UIKit -framework AudioToolbox -framework CoreAudio -framework Metal -framework MetalKit -framework QuartzCore -framework ImageIO -framework GameController -framework CoreGraphics -framework UniformTypeIdentifiers"
+    "-fexceptions -framework CoreServices -framework Foundation -framework IOKit -framework UIKit -framework AudioToolbox -framework CoreAudio -framework Metal -framework MetalKit -framework QuartzCore -framework ImageIO -framework GameController -framework CoreGraphics"
   )
   list(APPEND PLATFORM_LINKLIBS "${LIBDIR}/libb2/lib/libb2.a")
 else()
@@ -772,34 +707,15 @@ endif()
 if(WITH_APPLE_CROSSPLATFORM AND DEFINED BLENDER_IOS_BUNDLE_ID AND NOT "${BLENDER_IOS_BUNDLE_ID}" STREQUAL "")
   set(CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${BLENDER_IOS_BUNDLE_ID}")
 endif()
-if(DEFINED CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER AND NOT "${CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER}" STREQUAL "")
-  # Ensure configure-time Info.plist substitution (`${MACOSX_BUNDLE_GUI_IDENTIFIER}`)
-  # receives the same identifier used by Xcode signing settings.
-  set(CMAKE_MACOSX_BUNDLE_GUI_IDENTIFIER "${CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER}")
-endif()
 
 if(WITH_APPLE_CROSSPLATFORM)
   if(APPLE_TARGET_IOS)
     set(CMAKE_XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2")
     set(CMAKE_XCODE_ATTRIBUTE_SUPPORTS_MACCATALYST NO)
     set(CMAKE_XCODE_ATTRIBUTE_SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD NO)
-    # Prebuilt deps are per platform: lib/ios_arm64 (device) vs lib/ios-simulator_arm64.
-    # Pin Xcode to the configured SDK so device libs are not linked into simulator builds.
-    if(APPLE_TARGET_DEVICE STREQUAL "ios")
-      set(CMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS "iphoneos")
-    elseif(APPLE_TARGET_DEVICE STREQUAL "ios-simulator")
-      set(CMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS "iphonesimulator")
-    endif()
 
     # Entitlements file reference
     # `release/ios` is hardcoded since we want to use the same entitlements for both iOS-Simulator and normal iOS builds.
-    # Allow overriding/clearing from command-line when provisioning profile entitlement checks fail.
-    if(DEFINED BLENDER_IOS_CODE_SIGN_ENTITLEMENTS)
-      if(NOT "${BLENDER_IOS_CODE_SIGN_ENTITLEMENTS}" STREQUAL "")
-        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${BLENDER_IOS_CODE_SIGN_ENTITLEMENTS}")
-      endif()
-    else()
-      set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_SOURCE_DIR}/release/ios/entitlements.plist")
-    endif()
+    set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_SOURCE_DIR}/release/ios/entitlements.plist")
   endif()
 endif()

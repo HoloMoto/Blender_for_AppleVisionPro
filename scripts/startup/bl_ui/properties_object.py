@@ -30,7 +30,16 @@ class OBJECT_PT_context_object(ObjectButtonsPanel, Panel):
             layout.template_ID(space, "pin_id")
         else:
             row = layout.row()
-            row.template_ID(context.view_layer.objects, "active", filter='AVAILABLE')
+            layer_objects = getattr(context.view_layer, "objects", None)
+            if layer_objects is not None:
+                try:
+                    row.template_ID(layer_objects, "active", filter='AVAILABLE')
+                except Exception:
+                    # Some iOS experimental builds expose LayerObjects without a valid "active" pointer.
+                    row.label(text="Active object unavailable")
+            else:
+                # iOS experimental builds can briefly expose an incomplete view-layer RNA.
+                row.label(text="Active object unavailable")
 
 
 class OBJECT_PT_transform(ObjectButtonsPanel, Panel):

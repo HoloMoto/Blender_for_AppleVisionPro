@@ -107,8 +107,10 @@ class _defs_view3d_generic:
     def cursor():
         def draw_settings(_context, layout, tool):
             props = tool.operator_properties("view3d.cursor3d")
-            layout.prop(props, "use_depth")
-            layout.prop(props, "orientation")
+            if hasattr(props, "use_depth"):
+                layout.prop(props, "use_depth")
+            if hasattr(props, "orientation"):
+                layout.prop(props, "orientation")
         return dict(
             idname="builtin.cursor",
             label="Cursor",

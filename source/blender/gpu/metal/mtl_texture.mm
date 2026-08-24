@@ -339,9 +339,12 @@ void gpu::MTLTexture::blit(id<MTLBlitCommandEncoder> blit_encoder,
 
   BLI_assert(dst);
   BLI_assert(width > 0 && height > 0 && depth > 0);
-  MTLSize src_size = MTLSizeMake(width, height, depth);
-  MTLOrigin src_origin = MTLOriginMake(src_x_offset, src_y_offset, src_z_offset);
-  MTLOrigin dst_origin = MTLOriginMake(dst_x_offset, dst_y_offset, dst_z_offset);
+  id<MTLTexture> src_tex = this->get_metal_handle_base();
+  id<MTLTexture> dst_tex = dst->get_metal_handle_base();
+  if (src_tex == nil || dst_tex == nil) {
+    MTL_LOG_WARNING("gpu::MTLTexture::blit skipped: source/destination texture is nil");
+    return;
+  }
 
   if (this->format_get() != dst->format_get()) {
     MTL_LOG_WARNING(
@@ -350,14 +353,53 @@ void gpu::MTLTexture::blit(id<MTLBlitCommandEncoder> blit_encoder,
     return;
   }
 
+  if (src_tex.textureType != dst_tex.textureType || src_tex.sampleCount != dst_tex.sampleCount) {
+    MTL_LOG_WARNING("gpu::MTLTexture::blit skipped: incompatible texture type/sample count");
+    return;
+  }
+
+  if (src_mip >= src_tex.mipmapLevelCount || dst_mip >= dst_tex.mipmapLevelCount ||
+      src_slice >= src_tex.arrayLength || dst_slice >= dst_tex.arrayLength)
+  {
+    MTL_LOG_WARNING("gpu::MTLTexture::blit skipped: invalid mip/slice");
+    return;
+  }
+
+  const uint src_mip_w = max_uu(uint(src_tex.width >> src_mip), 1u);
+  const uint src_mip_h = max_uu(uint(src_tex.height >> src_mip), 1u);
+  const uint src_mip_d = max_uu(uint(src_tex.depth >> src_mip), 1u);
+  const uint dst_mip_w = max_uu(uint(dst_tex.width >> dst_mip), 1u);
+  const uint dst_mip_h = max_uu(uint(dst_tex.height >> dst_mip), 1u);
+  const uint dst_mip_d = max_uu(uint(dst_tex.depth >> dst_mip), 1u);
+
+  if (src_x_offset >= src_mip_w || src_y_offset >= src_mip_h || src_z_offset >= src_mip_d ||
+      dst_x_offset >= dst_mip_w || dst_y_offset >= dst_mip_h || dst_z_offset >= dst_mip_d)
+  {
+    MTL_LOG_WARNING("gpu::MTLTexture::blit skipped: copy origin outside mip bounds");
+    return;
+  }
+
+  const uint safe_width = min_uu(width, min_uu(src_mip_w - src_x_offset, dst_mip_w - dst_x_offset));
+  const uint safe_height = min_uu(
+      height, min_uu(src_mip_h - src_y_offset, dst_mip_h - dst_y_offset));
+  const uint safe_depth = min_uu(depth, min_uu(src_mip_d - src_z_offset, dst_mip_d - dst_z_offset));
+  if (safe_width == 0 || safe_height == 0 || safe_depth == 0) {
+    MTL_LOG_WARNING("gpu::MTLTexture::blit skipped: zero-sized safe copy region");
+    return;
+  }
+
+  MTLSize src_size = MTLSizeMake(safe_width, safe_height, safe_depth);
+  MTLOrigin src_origin = MTLOriginMake(src_x_offset, src_y_offset, src_z_offset);
+  MTLOrigin dst_origin = MTLOriginMake(dst_x_offset, dst_y_offset, dst_z_offset);
+
   /* TODO(Metal): Verify if we want to use the one with modified base-level/texture view
    * or not. */
-  [blit_encoder copyFromTexture:this->get_metal_handle_base()
+  [blit_encoder copyFromTexture:src_tex
                     sourceSlice:src_slice
                     sourceLevel:src_mip
                    sourceOrigin:src_origin
                      sourceSize:src_size
-                      toTexture:dst->get_metal_handle_base()
+                      toTexture:dst_tex
                destinationSlice:dst_slice
                destinationLevel:dst_mip
               destinationOrigin:dst_origin];

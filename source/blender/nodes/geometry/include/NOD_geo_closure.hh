@@ -50,20 +50,20 @@ struct ClosureInputItemsAccessor : public socket_items::SocketItemsAccessorDefau
   using ItemT = NodeClosureInputItem;
   static StructRNA *item_srna;
   static int node_type;
-  static constexpr StringRefNull node_idname = "NodeClosureOutput";
+  inline static const StringRefNull node_idname = "NodeClosureOutput";
   static constexpr bool has_type = true;
   static constexpr bool has_name = true;
   struct operator_idnames {
-    static constexpr StringRefNull add_item = "NODE_OT_closure_input_item_add";
-    static constexpr StringRefNull remove_item = "NODE_OT_closure_input_item_remove";
-    static constexpr StringRefNull move_item = "NODE_OT_closure_input_item_move";
+    inline static const StringRefNull add_item = "NODE_OT_closure_input_item_add";
+    inline static const StringRefNull remove_item = "NODE_OT_closure_input_item_remove";
+    inline static const StringRefNull move_item = "NODE_OT_closure_input_item_move";
   };
   struct ui_idnames {
-    static constexpr StringRefNull list = "DATA_UL_closure_input_items";
+    inline static const StringRefNull list = "DATA_UL_closure_input_items";
   };
   struct rna_names {
-    static constexpr StringRefNull items = "input_items";
-    static constexpr StringRefNull active_index = "active_input_index";
+    inline static const StringRefNull items = "input_items";
+    inline static const StringRefNull active_index = "active_input_index";
   };
 
   static socket_items::SocketItemsRef<ItemT> get_items_from_node(bNode &node)
@@ -124,20 +124,20 @@ struct ClosureOutputItemsAccessor : public socket_items::SocketItemsAccessorDefa
   using ItemT = NodeClosureOutputItem;
   static StructRNA *item_srna;
   static int node_type;
-  static constexpr StringRefNull node_idname = "NodeClosureOutput";
+  inline static const StringRefNull node_idname = "NodeClosureOutput";
   static constexpr bool has_type = true;
   static constexpr bool has_name = true;
   struct operator_idnames {
-    static constexpr StringRefNull add_item = "NODE_OT_closure_output_item_add";
-    static constexpr StringRefNull remove_item = "NODE_OT_closure_output_item_remove";
-    static constexpr StringRefNull move_item = "NODE_OT_closure_output_item_move";
+    inline static const StringRefNull add_item = "NODE_OT_closure_output_item_add";
+    inline static const StringRefNull remove_item = "NODE_OT_closure_output_item_remove";
+    inline static const StringRefNull move_item = "NODE_OT_closure_output_item_move";
   };
   struct ui_idnames {
-    static constexpr StringRefNull list = "DATA_UL_closure_output_items";
+    inline static const StringRefNull list = "DATA_UL_closure_output_items";
   };
   struct rna_names {
-    static constexpr StringRefNull items = "output_items";
-    static constexpr StringRefNull active_index = "active_output_index";
+    inline static const StringRefNull items = "output_items";
+    inline static const StringRefNull active_index = "active_output_index";
   };
 
   static socket_items::SocketItemsRef<ItemT> get_items_from_node(bNode &node)
@@ -198,20 +198,20 @@ struct EvaluateClosureInputItemsAccessor : public socket_items::SocketItemsAcces
   using ItemT = NodeEvaluateClosureInputItem;
   static StructRNA *item_srna;
   static int node_type;
-  static constexpr StringRefNull node_idname = "NodeEvaluateClosure";
+  inline static const StringRefNull node_idname = "NodeEvaluateClosure";
   static constexpr bool has_type = true;
   static constexpr bool has_name = true;
   struct operator_idnames {
-    static constexpr StringRefNull add_item = "NODE_OT_evaluate_closure_input_item_add";
-    static constexpr StringRefNull remove_item = "NODE_OT_evaluate_closure_input_item_remove";
-    static constexpr StringRefNull move_item = "NODE_OT_evaluate_closure_input_item_move";
+    inline static const StringRefNull add_item = "NODE_OT_evaluate_closure_input_item_add";
+    inline static const StringRefNull remove_item = "NODE_OT_evaluate_closure_input_item_remove";
+    inline static const StringRefNull move_item = "NODE_OT_evaluate_closure_input_item_move";
   };
   struct ui_idnames {
-    static constexpr StringRefNull list = "DATA_UL_evaluate_closure_input_items";
+    inline static const StringRefNull list = "DATA_UL_evaluate_closure_input_items";
   };
   struct rna_names {
-    static constexpr StringRefNull items = "input_items";
-    static constexpr StringRefNull active_index = "active_input_index";
+    inline static const StringRefNull items = "input_items";
+    inline static const StringRefNull active_index = "active_input_index";
   };
 
   static socket_items::SocketItemsRef<ItemT> get_items_from_node(bNode &node)
@@ -274,20 +274,20 @@ struct EvaluateClosureOutputItemsAccessor : public socket_items::SocketItemsAcce
   using ItemT = NodeEvaluateClosureOutputItem;
   static StructRNA *item_srna;
   static int node_type;
-  static constexpr StringRefNull node_idname = "NodeEvaluateClosure";
+  inline static const StringRefNull node_idname = "NodeEvaluateClosure";
   static constexpr bool has_type = true;
   static constexpr bool has_name = true;
   struct operator_idnames {
-    static constexpr StringRefNull add_item = "NODE_OT_evaluate_closure_output_item_add";
-    static constexpr StringRefNull remove_item = "NODE_OT_evaluate_closure_output_item_remove";
-    static constexpr StringRefNull move_item = "NODE_OT_evaluate_closure_output_item_move";
+    inline static const StringRefNull add_item = "NODE_OT_evaluate_closure_output_item_add";
+    inline static const StringRefNull remove_item = "NODE_OT_evaluate_closure_output_item_remove";
+    inline static const StringRefNull move_item = "NODE_OT_evaluate_closure_output_item_move";
   };
   struct ui_idnames {
-    static constexpr StringRefNull list = "DATA_UL_evaluate_closure_output_items";
+    inline static const StringRefNull list = "DATA_UL_evaluate_closure_output_items";
   };
   struct rna_names {
-    static constexpr StringRefNull items = "output_items";
-    static constexpr StringRefNull active_index = "active_output_index";
+    inline static const StringRefNull items = "output_items";
+    inline static const StringRefNull active_index = "active_output_index";
   };
 
   static socket_items::SocketItemsRef<ItemT> get_items_from_node(bNode &node)

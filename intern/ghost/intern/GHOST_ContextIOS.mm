@@ -14,6 +14,8 @@
 
 #include "DNA_userdef_types.h"
 
+#include <cmath>
+
 #import <Metal/Metal.h>
 #import <MetalKit/MTKView.h>
 #import <QuartzCore/QuartzCore.h>
@@ -324,10 +326,19 @@ void GHOST_ContextIOS::metalUpdateFramebuffer()
   CGFloat scaling_fac = [UIScreen mainScreen].scale;
   CGFloat screenWidth = screenRect.size.width;
   CGFloat screenHeight = screenRect.size.height;
+  if (!std::isfinite(scaling_fac) || scaling_fac <= 0.0f) {
+    scaling_fac = 1.0f;
+  }
+  if (!std::isfinite(screenWidth) || screenWidth <= 0.0f) {
+    screenWidth = 1440.0f;
+  }
+  if (!std::isfinite(screenHeight) || screenHeight <= 0.0f) {
+    screenHeight = 960.0f;
+  }
   size_t width = screenWidth * scaling_fac;
   size_t height = screenHeight * scaling_fac;
 
-  if (width <= 0 && height <= 0) {
+  if (width <= 0 || height <= 0) {
     GHOST_ASSERT(false, "Negative or null display dimmensions");
     /* TOOD: Better default size. This should not happen but is here to avoid erroneous
      * initialization. */
@@ -426,7 +437,9 @@ void GHOST_ContextIOS::metalSwapBuffers()
       GHOST_ContextIOS::prevDrawable = current_drawable;
     }
     if (current_drawable_presented) {
-      NSLog(@"Double present (MTKView)%p!", metal_view_);
+      /* Already presented this drawable in the current display interval.
+       * Skip duplicate presents to avoid swap-chain contention and log spam. */
+      return;
     }
 
     GHOST_ASSERT(contextPresentCallback, "iOS: Missing context present callback");

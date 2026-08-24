@@ -179,3 +179,16 @@ void uiTemplateIconView(uiLayout *layout,
     MEM_freeN(items);
   }
 }
+
+void uiTemplateIconView(uiLayout *layout,
+                        PointerRNA *ptr,
+                        const char *propname,
+                        bool show_labels,
+                        float icon_scale,
+                        float icon_scale_popup)
+{
+  if (UNLIKELY(propname == nullptr || size_t(propname) < 4096 || propname[0] == '\0')) {
+    return;
+  }
+  uiTemplateIconView(layout, ptr, StringRefNull(propname), show_labels, icon_scale, icon_scale_popup);
+}

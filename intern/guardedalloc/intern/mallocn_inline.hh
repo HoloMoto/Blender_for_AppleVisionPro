@@ -82,7 +82,9 @@ MEM_INLINE void MEM_trigger_error_on_memory_block(const void *address, const siz
 MEM_INLINE void MEM_trigger_error_on_memory_block(const void * /*address*/, const size_t /*size*/)
 {
 #  ifdef WITH_ASSERT_ABORT
+#    ifndef WITH_APPLE_CROSSPLATFORM
   abort();
+#    endif
 #  endif
 }
 #endif

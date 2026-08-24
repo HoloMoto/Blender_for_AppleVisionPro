@@ -25,25 +25,6 @@
 			</array>
 		</dict>
 	</array>
-	<key>UILaunchStoryboardName</key>
-	<string>Main</string>
-	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<false/>
-		<key>UISceneConfigurations</key>
-		<dict>
-			<key>UIWindowSceneSessionRoleApplication</key>
-			<array>
-				<dict>
-					<key>UISceneConfigurationName</key>
-					<string>Default Configuration</string>
-					<key>UISceneDelegateClassName</key>
-					<string>IOSSceneDelegate</string>
-				</dict>
-			</array>
-		</dict>
-	</dict>
 	<key>CFBundleExecutable</key>
 	<string>Blender</string>
 	<key>CFBundleGetInfoString</key>
@@ -51,7 +32,7 @@
 	<key>CFBundleIconFile</key>
 	<string>Assets/blender_icon.icns</string>
 	<key>CFBundleIdentifier</key>
-	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<string>jp.ac.sojo.blendervision</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -64,20 +45,16 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>UIViewControllerBasedStatusBarAppearance</key>
-	<false/>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>UIRequiresFullScreen</key>
+	<true/>
 	<key>UIStatusBarHidden</key>
 	<true/>
-    <key>UIFileSharingEnabled</key>
-    <true/>
-    <key>UIApplicationSupportsIndirectInputEvents</key>
-    <true/>
-    <key>UISupportsDocumentBrowser</key>
-    <true/>
-    <key>LSSupportsOpeningDocumentsInPlace</key>
-    <true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
@@ -85,6 +62,10 @@
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 	</array>
+	<key>UISupportsDocumentBrowser</key>
+	<true/>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
@@ -92,8 +73,6 @@
 			<array>
 				<string>public.data</string>
 			</array>
-			<key>UTTypeIdentifier</key>
-			<string>org.blenderfoundation.blender.file</string>
 			<key>UTTypeDescription</key>
 			<string>Blender File</string>
 			<key>UTTypeIcons</key>
@@ -103,6 +82,8 @@
 				<key>UTTypeIconText</key>
 				<string>blend</string>
 			</dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.blenderfoundation.blender.file</string>
 			<key>UTTypeTagSpecification</key>
 			<dict>
 				<key>public.filename-extension</key>
@@ -112,5 +93,7 @@
 			</dict>
 		</dict>
 	</array>
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
+	<true/>
 </dict>
 </plist>

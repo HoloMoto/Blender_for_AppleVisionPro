@@ -178,13 +178,13 @@ class FrameBuffer {
       /* IOS_FIXME - selecting 2D Full Canvas window causes a viewport with a -1 origin.
        Workaround for now. */
       if (viewport_[0][0] < 0 || viewport_[0][1] < 0) {
-        printf("Invalid viewport detected: %d,%d - %dx%d\n",
-               viewport_[0][0],
-               viewport_[0][1],
-               viewport_[0][2],
-               viewport_[0][3]);
-        viewport_[0][0] = max_ii(viewport_[0][0], 0);
-        viewport_[0][1] = max_ii(viewport_[0][1], 0);
+        const int x_off = max_ii(-viewport_[0][0], 0);
+        const int y_off = max_ii(-viewport_[0][1], 0);
+        viewport_[0][0] += x_off;
+        viewport_[0][1] += y_off;
+        /* Keep right/top edge stable after origin clamp. */
+        viewport_[0][2] = max_ii(viewport_[0][2] - x_off, 1);
+        viewport_[0][3] = max_ii(viewport_[0][3] - y_off, 1);
       }
 #endif
     }

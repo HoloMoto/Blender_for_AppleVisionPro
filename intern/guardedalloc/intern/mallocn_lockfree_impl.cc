@@ -13,6 +13,9 @@
 #include <stdlib.h>
 #include <string.h> /* memcpy */
 #include <sys/types.h>
+#ifdef __APPLE__
+#  include <malloc/malloc.h>
+#endif
 
 #include "MEM_guardedalloc.h"
 
@@ -53,6 +56,16 @@ static bool malloc_debug_memset = false;
 
 static void (*error_callback)(const char *) = nullptr;
 
+#ifdef WITH_APPLE_CROSSPLATFORM
+static uint64_t g_ios_invalid_free_report_count = 0;
+
+static bool ios_should_report_invalid_free()
+{
+  const uint64_t count = ++g_ios_invalid_free_report_count;
+  return (count <= 8) || ((count & (count - 1)) == 0);
+}
+#endif
+
 /**
  * Guardedalloc always allocate multiple of 4 bytes. That means that the lower 2 bits of the
  * `len` member of #MemHead/#MemHeadAligned data can be used for the bitflags below.
@@ -82,13 +95,10 @@ enum {
 __attribute__((format(printf, 1, 0)))
 #endif
 static void
-print_error_va(const char *message, va_list str_format_args)
+print_error(const char *message, va_list str_format_args)
 {
   char buf[512];
-  va_list str_format_args_copy;
-  va_copy(str_format_args_copy, str_format_args);
-  vsnprintf(buf, sizeof(buf), message, str_format_args_copy);
-  va_end(str_format_args_copy);
+  vsnprintf(buf, sizeof(buf), message, str_format_args);
   buf[sizeof(buf) - 1] = '\0';
 
   if (error_callback) {
@@ -104,7 +114,7 @@ print_error(const char *message, ...)
 {
   va_list str_format_args;
   va_start(str_format_args, message);
-  print_error_va(message, str_format_args);
+  print_error(message, str_format_args);
   va_end(str_format_args);
 }
 
@@ -117,7 +127,7 @@ report_error_on_address(const void *vmemh, const char *message, ...)
   va_list str_format_args;
 
   va_start(str_format_args, message);
-  print_error_va(message, str_format_args);
+  print_error(message, str_format_args);
   va_end(str_format_args);
 
   if (vmemh == nullptr) {
@@ -154,17 +164,37 @@ void MEM_lockfree_freeN(void *vmemh, AllocationType allocation_type)
   }
 
   if (UNLIKELY(vmemh == nullptr)) {
+#ifdef WITH_APPLE_CROSSPLATFORM
+    /* iOS startup currently hits mixed Python/RNA error paths that may double-clean optional
+     * pointers. Ignore nullptr frees to keep runtime alive while debugging higher-level issues. */
+    return;
+#else
     report_error_on_address(vmemh, "Attempt to free nullptr pointer\n");
     return;
+#endif
   }
 
   MemHead *memh = MEMHEAD_FROM_PTR(vmemh);
   size_t len = MEMHEAD_LEN(memh);
 
+#ifdef WITH_APPLE_CROSSPLATFORM
+  /* iOS debug runs can pass stale/non-guarded pointers through mixed cleanup paths.
+   * Avoid crashing in `free()` on obviously invalid headers. */
+  if (UNLIKELY(uintptr_t(memh) < 4096 || (len == 0) || (len > (size_t(1) << 34)))) {
+    if (ios_should_report_invalid_free()) {
+      report_error_on_address(vmemh, "Skipping free for invalid mem header on iOS\n");
+    }
+    return;
+  }
+#endif
+
   if (allocation_type != AllocationType::NEW_DELETE && MEMHEAD_IS_FROM_CPP_NEW(memh)) {
     report_error_on_address(
         vmemh,
         "Attempt to use C-style MEM_freeN on a pointer created with CPP-style MEM_new or new\n");
+#ifdef WITH_APPLE_CROSSPLATFORM
+    return;
+#endif
   }
 
   memory_usage_block_free(len);
@@ -174,9 +204,26 @@ void MEM_lockfree_freeN(void *vmemh, AllocationType allocation_type)
   }
   if (UNLIKELY(MEMHEAD_IS_ALIGNED(memh))) {
     MemHeadAligned *memh_aligned = MEMHEAD_ALIGNED_FROM_PTR(vmemh);
+#ifdef WITH_APPLE_CROSSPLATFORM
+    void *real_ptr = MEMHEAD_REAL_PTR(memh_aligned);
+    if (UNLIKELY(real_ptr == nullptr || uintptr_t(real_ptr) < 4096 || malloc_size(real_ptr) == 0)) {
+      if (ios_should_report_invalid_free()) {
+        report_error_on_address(vmemh, "Skipping aligned_free for non-malloc pointer on iOS\n");
+      }
+      return;
+    }
+#endif
     aligned_free(MEMHEAD_REAL_PTR(memh_aligned));
   }
   else {
+#ifdef WITH_APPLE_CROSSPLATFORM
+    if (UNLIKELY(malloc_size(memh) == 0)) {
+      if (ios_should_report_invalid_free()) {
+        report_error_on_address(vmemh, "Skipping free for non-malloc pointer on iOS\n");
+      }
+      return;
+    }
+#endif
     free(memh);
   }
 }

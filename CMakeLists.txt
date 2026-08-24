@@ -114,7 +114,9 @@ project(Blender)
 
 blender_project_hack_post()
 
-enable_testing()
+# enable_testing() is issued after `WITH_APPLE_CROSSPLATFORM` is known (see block below).
+# iOS/Xcode otherwise generates a RUN_TESTS target that runs `ctest` post-build and fails
+# (wrong config, no device tests, or hardcoded ctest path).
 
 
 # -----------------------------------------------------------------------------
@@ -141,12 +143,16 @@ if(APPLE)
        message(FATAL_ERROR "CMAKE_SYSTEM_NAME should be 'iOS' if WITH_APPLE_CROSSPLATFORM set. CMAKE_SYSTEM_NAME='${CMAKE_SYSTEM_NAME}'")
     endif()
     add_definitions(-DWITH_APPLE_CROSSPLATFORM)
-    # Personal / ad-hoc signing: org.blenderfoundation.* is reserved; use a unique ID you can register.
+    # Personal / ad-hoc signing: org.blenderfoundation.* is reserved; use a unique ID you can register (e.g. com.yourname.blender).
     set(BLENDER_IOS_BUNDLE_ID "com.localdev.blenderios" CACHE STRING "iOS: Bundle identifier for code signing (must be unique to your Apple Developer team)")
     set(BLENDER_IOS_DEVELOPMENT_TEAM "U37A3FX23B" CACHE STRING "iOS: Xcode DEVELOPMENT_TEAM (10-character Team ID)")
   else()
     message(STATUS "Building for native platform target: ${APPLE_TARGET_DEVICE}, CMAKE_SYSTEM_NAME:${CMAKE_SYSTEM_NAME}")
   endif()
+endif()
+
+if(NOT APPLE OR NOT WITH_APPLE_CROSSPLATFORM)
+  enable_testing()
 endif()
 
 
@@ -2792,7 +2798,9 @@ endif()
 # -----------------------------------------------------------------------------
 # Add Testing Directory
 
-add_subdirectory(tests)
+if(NOT APPLE OR NOT WITH_APPLE_CROSSPLATFORM)
+  add_subdirectory(tests)
+endif()
 
 
 # -----------------------------------------------------------------------------

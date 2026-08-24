@@ -2314,6 +2314,13 @@ void uiTemplateIDTabs(uiLayout *layout,
                       const char *newop,
                       const char *menu,
                       int filter = UI_TEMPLATE_ID_FILTER_ALL);
+void uiTemplateIDTabs(uiLayout *layout,
+                      bContext *C,
+                      PointerRNA *ptr,
+                      const char *propname,
+                      const char *newop,
+                      const char *menu,
+                      int filter = UI_TEMPLATE_ID_FILTER_ALL);
 /**
  * This is for selecting the type of ID-block to use,
  * and then from the relevant type choosing the block to use.
@@ -2425,6 +2432,12 @@ void uiTemplateIcon(uiLayout *layout, int icon_value, float icon_scale);
 void uiTemplateIconView(uiLayout *layout,
                         PointerRNA *ptr,
                         blender::StringRefNull propname,
+                        bool show_labels,
+                        float icon_scale,
+                        float icon_scale_popup);
+void uiTemplateIconView(uiLayout *layout,
+                        PointerRNA *ptr,
+                        const char *propname,
                         bool show_labels,
                         float icon_scale,
                         float icon_scale_popup);

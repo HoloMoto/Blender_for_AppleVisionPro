@@ -1437,7 +1437,8 @@ PointerRNA uiLayout::op_menu_hold(wmOperatorType *ot,
 {
   PointerRNA ptr;
   uiBut *but = uiItemFullO_ptr_ex(this, ot, name, icon, context, flag, &ptr);
-  UI_but_func_hold_set(but, ui_item_menu_hold, BLI_strdup(menu_id));
+  const char *safe_menu_id = (menu_id != nullptr && uintptr_t(menu_id) >= 4096) ? menu_id : "";
+  UI_but_func_hold_set(but, ui_item_menu_hold, BLI_strdup(safe_menu_id));
   return ptr;
 }
 
@@ -2322,7 +2323,15 @@ void uiLayout::prop(PointerRNA *ptr,
 
   /* ensure text isn't added to icon_only buttons */
   if (but && icon_only) {
+#ifdef WITH_APPLE_CROSSPLATFORM
+    if (!but->str.empty()) {
+      /* iOS startup can feed malformed RNA property strings through Python UI calls.
+       * Keep icon-only buttons valid instead of aborting the app. */
+      but->str.clear();
+    }
+#else
     BLI_assert(but->str.empty());
+#endif
   }
 }
 
@@ -5914,6 +5923,10 @@ static bool ui_layout_has_panel_label(const uiLayout *layout, const PanelType *p
 
 static void ui_paneltype_draw_impl(bContext *C, PanelType *pt, uiLayout *layout, bool show_header)
 {
+  if (UNLIKELY(pt == nullptr || pt->draw == nullptr)) {
+    RNA_warning("ui_paneltype_draw_impl: unknown paneltype");
+    return;
+  }
   uiBlock *block = layout->block();
   Panel *panel = BKE_panel_new(pt);
   panel->flag = PNL_POPOVER;

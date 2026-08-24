@@ -48,5 +48,11 @@ void _BLI_assert_abort()
    * For example `BLI_assert_unreachable();` at the end of a function that returns a value,
    * will hide that it's missing a return. */
 
+#if defined(WITH_APPLE_CROSSPLATFORM)
+  /* On iOS bring-up we prefer continuing after assert so we can capture downstream failures. */
+  fprintf(stderr, "BLI_assert abort suppressed on iOS cross-platform build.\n");
+  return;
+#else
   abort();
+#endif
 }

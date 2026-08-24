@@ -38,7 +38,6 @@ if(WITH_TBB)
   # that it is initialized before MKL and static library initialization order issues are avoided.
   #
   # This isn't fully robust but seems to work.
-  list(INSERT LIB 0 ${TBB_LIBRARIES})
   list(INSERT LIB 0 bf_blenkernel)
 endif()
 
@@ -152,6 +151,11 @@ set(SRC
 
   creator_intern.h
 )
+
+# iOS: host makesrna may reference RNA_USDHook while WITH_USD is forced OFF.
+if(WITH_APPLE_CROSSPLATFORM AND NOT WITH_USD)
+  list(APPEND SRC rna_usd_hook_stub.cc)
+endif()
 
 if(CMAKE_GENERATOR MATCHES "^Visual Studio.+")
   # This helps visual studio find the debugger visualizers
@@ -341,10 +345,8 @@ if(WITH_PYTHON_MODULE)
 else()
 
   if(WITH_APPLE_CROSSPLATFORM)
-    # Add Storyboard - required for main window interface.
-    set(storyboards ${OSX_APP_SOURCEDIR}/Main.storyboard)
-
-    add_executable(blender ${EXETYPE} ${SRC} ${storyboards})
+    # iOS window is created programmatically by GHOST, so avoid storyboard startup path.
+    add_executable(blender ${EXETYPE} ${SRC})
 
     # Additional libraries required by static python extensions compiled directly in source.
     # Otherwise will see Python linking issues during linking in Xcode about missing SSL etc.
@@ -470,106 +472,6 @@ elseif(APPLE)
   set(TARGETDIR_SITE_PACKAGES "${TARGETDIR_VER}/python/lib/python${PYTHON_VERSION}/site-packages")
   # Skip re-linking on CPACK / install.
   set_target_properties(blender PROPERTIES BUILD_WITH_INSTALL_RPATH true)
-  if(WITH_APPLE_CROSSPLATFORM)
-    # `xcodebuild build` skips install rules, so runtime resources (scripts/datafiles)
-    # needed at startup must be staged explicitly into the app bundle.
-    add_custom_command(
-      TARGET blender POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}"
-      COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/scripts" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/scripts"
-      COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/release/datafiles" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/datafiles"
-      COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/datafiles/locale"
-      COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/locale/po" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/datafiles/locale/po"
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/locale/languages" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/datafiles/locale/languages"
-      COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/scripts/addons_core/cycles"
-      COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/intern/cycles/blender/addon" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/scripts/addons_core/cycles"
-      VERBATIM
-    )
-
-    # Same as install rules: `xcodebuild build` skips `cmake --install`, so embedded Python must be
-    # staged or `Py_Initialize` falls back to paths baked into the libpython build (wrong on device).
-    if(WITH_PYTHON)
-      # For mobile bundles, keep Python in canonical layout:
-      #   Assets/<ver>/python/lib/pythonX.Y
-      # so CPython can resolve stdlib (`encodings`) from PYTHONHOME.
-      get_filename_component(_postbuild_pypath_real ${PYTHON_LIBPATH} REALPATH)
-      if(_postbuild_pypath_real MATCHES "lib64$")
-        set(_postbuild_py_dest_lib "lib64")
-      else()
-        set(_postbuild_py_dest_lib "lib")
-      endif()
-      unset(_postbuild_pypath_real)
-
-      if(EXISTS "${PYTHON_LIBPATH}/python${PYTHON_VERSION}")
-        add_custom_command(
-          TARGET blender POST_BUILD
-          COMMAND ${CMAKE_COMMAND} -E copy_directory "${PYTHON_LIBPATH}/python${PYTHON_VERSION}" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/python/${_postbuild_py_dest_lib}/python${PYTHON_VERSION}"
-          COMMENT "Stage Python stdlib into bundle (canonical lib/pythonX.Y layout)"
-          VERBATIM
-        )
-      else()
-        add_custom_command(
-          TARGET blender POST_BUILD
-          COMMAND ${CMAKE_COMMAND} -E copy_directory "${PYTHON_LIBPATH}" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/python/${_postbuild_py_dest_lib}"
-          COMMENT "Stage PYTHON_LIBPATH into bundle (fallback layout)"
-          VERBATIM
-        )
-      endif()
-      if(EXISTS "${PYTHON_LIBPATH}/python${PYTHON_VERSION_NO_DOTS}.zip")
-        add_custom_command(
-          TARGET blender POST_BUILD
-          COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PYTHON_LIBPATH}/python${PYTHON_VERSION_NO_DOTS}.zip" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/python/${_postbuild_py_dest_lib}/python${PYTHON_VERSION_NO_DOTS}.zip"
-          COMMENT "Stage optional pythonXY.zip into bundle"
-          VERBATIM
-        )
-      endif()
-      if(EXISTS "${PYTHON_EXECUTABLE}")
-        add_custom_command(
-          TARGET blender POST_BUILD
-          COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/python/bin"
-          COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PYTHON_EXECUTABLE}" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/python/bin/"
-          COMMENT "Stage python executable into bundle"
-          VERBATIM
-        )
-      endif()
-      unset(_postbuild_py_dest_lib)
-    endif()
-
-    # `xcodebuild build` does not run install rules, so bundled dylibs can be missing
-    # from the app bundle at runtime (`@rpath/...` load failure on device).
-    if(PLATFORM_BUNDLED_LIBRARIES)
-      add_custom_command(
-        TARGET blender POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:blender>/Assets/lib"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PLATFORM_BUNDLED_LIBRARIES} "$<TARGET_BUNDLE_DIR:blender>/Assets/lib"
-        # iOS rejects unsigned dylibs in app resources (dyld: no cdhash).
-        # Use Xcode signing identity when available, otherwise fall back to ad-hoc signing.
-        COMMAND /bin/sh -c "ID=\"\$EXPANDED_CODE_SIGN_IDENTITY\"; if [ -z \"\$ID\" ]; then ID='-'; fi; for f in \"$<TARGET_BUNDLE_DIR:blender>/Assets/lib\"/*.dylib; do /usr/bin/codesign --force --sign \"\$ID\" --timestamp=none \"\$f\" || exit 1; done"
-        VERBATIM
-      )
-    endif()
-
-    if(WITH_USD)
-      add_custom_command(
-        TARGET blender POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:blender>/Assets/lib/usd"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${LIBDIR}/usd/lib/usd" "$<TARGET_BUNDLE_DIR:blender>/Assets/lib/usd"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/datafiles/usd"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${LIBDIR}/usd/lib/usd" "$<TARGET_BUNDLE_DIR:blender>/Assets/${BLENDER_VERSION}/datafiles/usd"
-        COMMENT "Stage USD plugInfo registry into iOS bundle"
-        VERBATIM
-      )
-      if(EXISTS "${LIBDIR}/materialx/libraries")
-        add_custom_command(
-          TARGET blender POST_BUILD
-          COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:blender>/Assets/lib/materialx/libraries"
-          COMMAND ${CMAKE_COMMAND} -E copy_directory "${LIBDIR}/materialx/libraries" "$<TARGET_BUNDLE_DIR:blender>/Assets/lib/materialx/libraries"
-          COMMENT "Stage MaterialX libraries for USD on iOS"
-          VERBATIM
-        )
-      endif()
-    endif()
-  endif()
   if (NOT WITH_APPLE_CROSSPLATFORM)
     if(WITH_BLENDER_THUMBNAILER)
       set_target_properties(blender-thumbnailer PROPERTIES BUILD_WITH_INSTALL_RPATH true)
@@ -647,39 +549,45 @@ if(WITH_INTERNATIONAL)
   set(_locale_dir "${CMAKE_SOURCE_DIR}/locale")
   set(_locale_target_dir ${TARGETDIR_VER}/datafiles/locale)
 
-  file(GLOB _po_files "${_locale_dir}/po/*.po")
-  foreach(_po_file ${_po_files})
-    msgfmt_simple(${_po_file} _all_mo_files)
-  endforeach()
+  if(WITH_APPLE_CROSSPLATFORM)
+    # Xcode run scripts embed absolute paths to cmake/msgfmt from the configure host; builds
+    # often break when those differ. Skip compiling `.po` here; ship languages later if needed.
+    add_custom_target(locales COMMENT "locale .mo compilation skipped for iOS cross-compile")
+  else()
+    file(GLOB _po_files "${_locale_dir}/po/*.po")
+    foreach(_po_file ${_po_files})
+      msgfmt_simple(${_po_file} _all_mo_files)
+    endforeach()
 
-  # Create a custom target which will compile all `*.po` to `*.mo`.
-  add_custom_target(
-    locales
-    DEPENDS ${_all_mo_files}
-  )
-  add_dependencies(blender locales)
-
-  # Generate INSTALL rules.
-  install(
-    FILES ${_locale_dir}/languages
-    DESTINATION ${_locale_target_dir}
-  )
-
-  foreach(_mo_file ${_all_mo_files})
-    get_filename_component(_locale_name ${_mo_file} NAME_WE)
-    install(
-      FILES ${_mo_file}
-      DESTINATION ${_locale_target_dir}/${_locale_name}/LC_MESSAGES
-      RENAME blender.mo
+    # Create a custom target which will compile all `*.po` to `*.mo`.
+    add_custom_target(
+      locales
+      DEPENDS ${_all_mo_files}
     )
-    unset(_locale_name)
-  endforeach()
+    add_dependencies(blender locales)
 
-  unset(_all_mo_files)
-  unset(_po_files)
-  unset(_po_file)
-  unset(_mo_file)
-  unset(_locale_target_dir)
+    # Generate INSTALL rules.
+    install(
+      FILES ${_locale_dir}/languages
+      DESTINATION ${_locale_target_dir}
+    )
+
+    foreach(_mo_file ${_all_mo_files})
+      get_filename_component(_locale_name ${_mo_file} NAME_WE)
+      install(
+        FILES ${_mo_file}
+        DESTINATION ${_locale_target_dir}/${_locale_name}/LC_MESSAGES
+        RENAME blender.mo
+      )
+      unset(_locale_name)
+    endforeach()
+
+    unset(_all_mo_files)
+    unset(_po_files)
+    unset(_po_file)
+    unset(_mo_file)
+    unset(_locale_target_dir)
+  endif()
 
   unset(_locale_dir)
 endif()
@@ -1832,7 +1740,7 @@ elseif(APPLE)
      "./Blender.app/"
     )
     #IOS_FIXME: This makes no sense but need for now to prevent build breaks
-    if(TARGET blender-thumbnailer)
+    if(WITH_BLENDER_THUMBNAILER)
       install(
         TARGETS blender-thumbnailer
         DESTINATION "./Blender.app/"
@@ -1849,7 +1757,7 @@ elseif(APPLE)
       "Blender.app/Contents"
     )
 
-    if(TARGET blender-thumbnailer)
+    if(WITH_BLENDER_THUMBNAILER)
       install(
         TARGETS blender-thumbnailer
         DESTINATION "./Blender.app/Contents/PlugIns"
@@ -1889,6 +1797,31 @@ elseif(APPLE)
         message(\"Signing \${f} with signing identity: '\${EXTRACT_CODESIGN_IDENTITY}'\")
         execute_process(COMMAND codesign -s \"\${EXTRACT_CODESIGN_IDENTITY}\" --options runtime -f \${f})
       endforeach()")
+    endif()
+    # Xcode「Run」では `cmake --install` が走らないため、@loader_path/Assets/lib を満たすには
+    # ビルド成果物の .app 内へ依存 dylib を直接コピーする必要がある。
+    # 実機 (Debug-iphoneos) とシミュレータで .app の出力パスが異なるため、Xcode 環境変数を
+    # 優先するスクリプトを使う（`$<TARGET_FILE_DIR:>` だけだと bin/Debug 固定になりがち）。
+    if(WITH_APPLE_CROSSPLATFORM)
+      add_custom_command(
+        TARGET blender POST_BUILD
+        COMMAND bash "${CMAKE_SOURCE_DIR}/release/ios/copy_bundled_dylibs.sh"
+                "$<TARGET_FILE_DIR:blender>"
+                "${CMAKE_BINARY_DIR}"
+                ${PLATFORM_BUNDLED_LIBRARIES}
+        COMMENT "iOS: copy bundled dylibs into Blender.app/Assets/lib"
+      )
+      add_custom_command(
+        TARGET blender POST_BUILD
+        COMMAND bash "${CMAKE_SOURCE_DIR}/release/ios/copy_bundled_resources.sh"
+                "$<TARGET_FILE_DIR:blender>"
+                "${CMAKE_BINARY_DIR}"
+                "${BLENDER_VERSION}"
+                "${CMAKE_SOURCE_DIR}"
+                "${PYTHON_LIBPATH}"
+                "${PYTHON_VERSION}"
+        COMMENT "iOS: copy runtime resources into Blender.app/Assets/<version>"
+      )
     endif()
   endif()
 

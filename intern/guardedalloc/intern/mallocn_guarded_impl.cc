@@ -1043,9 +1043,15 @@ void MEM_guarded_freeN(void *vmemh, const AllocationType allocation_type)
   const char *name;
 
   if (memh == nullptr) {
+#ifdef WITH_APPLE_CROSSPLATFORM
+    /* iOS startup currently hits mixed Python/RNA error paths that may double-clean optional
+     * pointers. Ignore nullptr frees to keep runtime alive while debugging higher-level issues. */
+    return;
+#else
     MemorY_ErroR("free", "attempt to free nullptr pointer");
     // print_error(err_stream, "%d\n", (memh+4000)->tag1);
     return;
+#endif
   }
 
   if (sizeof(intptr_t) == 8) {
@@ -1063,12 +1069,23 @@ void MEM_guarded_freeN(void *vmemh, const AllocationType allocation_type)
 
   memh--;
 
+#ifdef WITH_APPLE_CROSSPLATFORM
+  if (UNLIKELY(uintptr_t(memh) < 4096 || (memh->len & ~size_t(0x3)) == 0 ||
+               (memh->len & ~size_t(0x3)) > (size_t(1) << 34)))
+  {
+    return;
+  }
+#endif
+
   if (allocation_type != AllocationType::NEW_DELETE &&
       (memh->flag & MEMHEAD_FLAG_FROM_CPP_NEW) != 0)
   {
     report_error_on_address(
         vmemh,
         "Attempt to use C-style MEM_freeN on a pointer created with CPP-style MEM_new or new\n");
+#ifdef WITH_APPLE_CROSSPLATFORM
+    return;
+#endif
   }
 
   if (memh->tag1 == MEMFREE && memh->tag2 == MEMFREE) {

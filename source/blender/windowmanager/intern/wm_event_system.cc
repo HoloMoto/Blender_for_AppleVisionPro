@@ -12,7 +12,6 @@
 
 #include <cstdlib>
 #include <cstring>
-#include <algorithm>
 #include <fmt/format.h>
 
 #include "AS_asset_library.hh"
@@ -70,7 +69,6 @@
 #include "RNA_access.hh"
 
 #include "UI_interface.hh"
-#include "UI_interface_c.hh"
 #include "UI_interface_layout.hh"
 #include "UI_view2d.hh"
 
@@ -91,24 +89,6 @@
 #include "DEG_depsgraph_query.hh"
 
 #include "RE_pipeline.h"
-
-#if defined(WITH_APPLE_CROSSPLATFORM) && defined(__APPLE__)
-#  include <TargetConditionals.h>
-#  if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-#    include "BKE_appdir.hh"
-#    include "BKE_report.hh"
-#    include "BLI_fileops.hh"
-#    include "BLI_path_utils.hh"
-#    include "BLO_writefile.hh"
-#    include "ED_fileselect.hh"
-#    ifdef WITH_USD
-#      include "io_usd.hh"
-#    endif
-#    include "RNA_access.hh"
-#    include "RNA_define.hh"
-#    include "BLF_api.hh"
-#  endif
-#endif
 
 using blender::StringRef;
 
@@ -326,9 +306,6 @@ static void wm_event_free_last(wmWindow *win)
 
 void wm_event_free_all(wmWindow *win)
 {
-  if (win->runtime == nullptr) {
-    return;
-  }
   while (wmEvent *event = static_cast<wmEvent *>(BLI_pophead(&win->runtime->event_queue))) {
     wm_event_free(event);
   }
@@ -515,10 +492,6 @@ static bool wm_notifier_is_clear(const wmNotifier *note)
 void wm_event_do_depsgraph(bContext *C, bool is_after_open_file)
 {
   wmWindowManager *wm = CTX_wm_manager(C);
-  Main *bmain = CTX_data_main(C);
-  if (wm == nullptr || bmain == nullptr) {
-    return;
-  }
   /* The whole idea of locked interface is to prevent viewport and whatever thread from
    * modifying the same data. Because of this, we can not perform dependency graph update. */
   if (wm->runtime->is_interface_locked) {
@@ -537,24 +510,18 @@ void wm_event_do_depsgraph(bContext *C, bool is_after_open_file)
   LISTBASE_FOREACH (wmWindow *, win, &wm->windows) {
     Scene *scene = WM_window_get_active_scene(win);
     ViewLayer *view_layer = WM_window_get_active_view_layer(win);
+    Main *bmain = CTX_data_main(C);
 
     /* Update dependency graph of sequencer scene. */
     Scene *sequencer_scene = CTX_data_sequencer_scene(C);
     if (sequencer_scene && sequencer_scene != scene) {
       Depsgraph *depsgraph = BKE_scene_ensure_depsgraph(
           bmain, sequencer_scene, BKE_view_layer_default_render(sequencer_scene));
-      if (depsgraph == nullptr) {
-        continue;
-      }
       if (is_after_open_file) {
         DEG_graph_relations_update(depsgraph);
         DEG_tag_on_visible_update(bmain, depsgraph);
       }
       BKE_scene_graph_update_tagged(depsgraph, bmain);
-    }
-
-    if (scene == nullptr || view_layer == nullptr) {
-      continue;
     }
 
     /* Copied to set's in #scene_update_tagged_recursive(). */
@@ -567,9 +534,6 @@ void wm_event_do_depsgraph(bContext *C, bool is_after_open_file)
      * and for until then we have to accept ambiguities when object is shared
      * across visible view layers and has overrides on it. */
     Depsgraph *depsgraph = BKE_scene_ensure_depsgraph(bmain, scene, view_layer);
-    if (depsgraph == nullptr) {
-      continue;
-    }
     if (is_after_open_file) {
       DEG_graph_tag_on_visible_update(depsgraph, true);
     }
@@ -583,15 +547,9 @@ void wm_event_do_depsgraph(bContext *C, bool is_after_open_file)
 void wm_event_do_refresh_wm_and_depsgraph(bContext *C)
 {
   wmWindowManager *wm = CTX_wm_manager(C);
-  if (wm == nullptr) {
-    return;
-  }
   /* Cached: editor refresh callbacks now, they get context. */
   LISTBASE_FOREACH (wmWindow *, win, &wm->windows) {
     const bScreen *screen = WM_window_get_active_screen(win);
-    if (screen == nullptr) {
-      continue;
-    }
 
     CTX_wm_window_set(C, win);
     LISTBASE_FOREACH (ScrArea *, area, &screen->areabase) {
@@ -624,8 +582,6 @@ static void wm_event_timers_execute(bContext *C)
 
 void wm_event_do_notifiers(bContext *C)
 {
-  wm_context_ensure_from_main(C);
-
   /* Ensure inside render boundary. */
   GPU_render_begin();
 
@@ -790,8 +746,7 @@ void wm_event_do_notifiers(bContext *C)
         /* Pass. */
       }
       else if (note->category == NC_SCENE && note->reference &&
-               (note->reference != scene) &&
-               (workspace == nullptr || note->reference != workspace->sequencer_scene))
+               (note->reference != scene && note->reference != workspace->sequencer_scene))
       {
         /* Pass. */
       }
@@ -808,42 +763,39 @@ void wm_event_do_notifiers(bContext *C)
         ED_workspace_do_listen(C, note);
         ED_screen_do_listen(C, note);
 
-        /* Active layout screen may be unset during embedded startup (e.g. iOS). */
-        if (screen != nullptr) {
-          LISTBASE_FOREACH (ARegion *, region, &screen->regionbase) {
+        LISTBASE_FOREACH (ARegion *, region, &screen->regionbase) {
+          wmRegionListenerParams region_params{};
+          region_params.window = win;
+          region_params.area = nullptr;
+          region_params.region = region;
+          region_params.scene = scene;
+          region_params.notifier = note;
+
+          ED_region_do_listen(&region_params);
+        }
+
+        ED_screen_areas_iter (win, screen, area) {
+          if ((note->category == NC_SPACE) && note->reference) {
+            /* Filter out notifiers sent to other spaces. RNA sets the reference to the owning ID
+             * though, the screen, so let notifiers through that reference the entire screen. */
+            if (!ELEM(note->reference, area->spacedata.first, screen, scene)) {
+              continue;
+            }
+          }
+          wmSpaceTypeListenerParams area_params{};
+          area_params.window = win;
+          area_params.area = area;
+          area_params.notifier = note;
+          area_params.scene = scene;
+          ED_area_do_listen(&area_params);
+          LISTBASE_FOREACH (ARegion *, region, &area->regionbase) {
             wmRegionListenerParams region_params{};
             region_params.window = win;
-            region_params.area = nullptr;
+            region_params.area = area;
             region_params.region = region;
             region_params.scene = scene;
             region_params.notifier = note;
-
             ED_region_do_listen(&region_params);
-          }
-
-          ED_screen_areas_iter (win, screen, area) {
-            if ((note->category == NC_SPACE) && note->reference) {
-              /* Filter out notifiers sent to other spaces. RNA sets the reference to the owning ID
-               * though, the screen, so let notifiers through that reference the entire screen. */
-              if (!ELEM(note->reference, area->spacedata.first, screen, scene)) {
-                continue;
-              }
-            }
-            wmSpaceTypeListenerParams area_params{};
-            area_params.window = win;
-            area_params.area = area;
-            area_params.notifier = note;
-            area_params.scene = scene;
-            ED_area_do_listen(&area_params);
-            LISTBASE_FOREACH (ARegion *, region, &area->regionbase) {
-              wmRegionListenerParams region_params{};
-              region_params.window = win;
-              region_params.area = area;
-              region_params.region = region;
-              region_params.scene = scene;
-              region_params.notifier = note;
-              ED_region_do_listen(&region_params);
-            }
           }
         }
       }
@@ -2851,492 +2803,6 @@ static void wm_operator_free_for_fileselect(wmOperator *file_operator)
   WM_operator_free(file_operator);
 }
 
-#if defined(WITH_APPLE_CROSSPLATFORM) && defined(__APPLE__) && defined(TARGET_OS_IPHONE) && \
-    TARGET_OS_IPHONE
-
-struct wmIOSFilePickerCtx {
-  bContext *C;
-  ListBase *handlers;
-  wmEventHandler_Op *handler;
-  char staged_path[FILE_MAX];
-};
-
-static bool wm_ios_fileselect_shows_props(const wmOperator *op)
-{
-  /* #WM_FILESEL_SHOW_PROPS omits the hide_props_region RNA property. */
-  return RNA_struct_find_property(op->ptr, "hide_props_region") == nullptr;
-}
-
-static bool wm_ios_fileselect_is_save_action(const wmOperator *op)
-{
-  if (STREQ(op->type->idname, "WM_OT_save_mainfile") ||
-      STREQ(op->type->idname, "WM_OT_save_as_mainfile"))
-  {
-    return true;
-  }
-  PropertyRNA *prop = RNA_struct_find_property(op->ptr, "check_existing");
-  if (prop == nullptr) {
-    return false;
-  }
-  PointerRNA null_ptr = RNA_pointer_create_discrete(nullptr, op->type->srna, nullptr);
-  return RNA_property_boolean_get_default(&null_ptr, prop);
-}
-
-static bool wm_ios_operator_uses_blend_save_exec(const wmOperator *op)
-{
-  return STREQ(op->type->idname, "WM_OT_save_mainfile") ||
-         STREQ(op->type->idname, "WM_OT_save_as_mainfile");
-}
-
-static void wm_ios_fileselect_finish_staged_export(bContext *C,
-                                                   ListBase *handlers,
-                                                   wmEventHandler_Op *handler,
-                                                   const char *path);
-
-static bool wm_ios_export_to_documents_folder(bContext *C,
-                                              ListBase *handlers,
-                                              wmEventHandler_Op *handler);
-
-static void wm_ios_show_export_failure_alert(wmOperator *op, const char *fallback_message)
-{
-  if (op->reports != nullptr) {
-    Report *report = BKE_reports_last_displayable(op->reports);
-    if (report != nullptr && report->message[0] != '\0') {
-      GHOST_IOS_show_native_alert("Export failed", report->message);
-      return;
-    }
-  }
-  GHOST_IOS_show_native_alert("Export failed", fallback_message);
-}
-
-static void wm_ios_prepare_export_operator(bContext *C, wmOperator *op)
-{
-  if (op->type->check != nullptr) {
-    op->type->check(C, op);
-  }
-
-#ifdef WITH_USD
-  if (STREQ(op->type->idname, "WM_OT_usd_export")) {
-    char filepath[FILE_MAX];
-    RNA_string_get(op->ptr, "filepath", filepath);
-    if (filepath[0] == '\0') {
-      ED_fileselect_ensure_default_filepath(C, op, ".usdz");
-    }
-    else if (!BLI_path_extension_check_n(
-                 filepath, ".usd", ".usda", ".usdc", ".usdz", nullptr))
-    {
-      BLI_path_extension_ensure(filepath, FILE_MAX, ".usdz");
-      RNA_string_set(op->ptr, "filepath", filepath);
-    }
-  }
-#endif
-}
-
-static wmWindow *wm_ios_fileselect_root_window(bContext *C, const wmEventHandler_Op *handler)
-{
-  wmWindowManager *wm = CTX_wm_manager(C);
-  if (handler->context.win != nullptr) {
-    return handler->context.win;
-  }
-  wmWindow *win = CTX_wm_window(C);
-  if (win != nullptr) {
-    return win;
-  }
-  return static_cast<wmWindow *>(wm->windows.first);
-}
-
-static void wm_ios_fileselect_finish_staged_export(bContext *C,
-                                                   ListBase *handlers,
-                                                   wmEventHandler_Op *handler,
-                                                   const char *path)
-{
-  wmWindowManager *wm = CTX_wm_manager(C);
-
-  RNA_string_set(handler->op->ptr, "filepath", path);
-  BLI_remlink(handlers, &handler->head);
-
-  BKE_reportf(&wm->runtime->reports, RPT_INFO, "Exported to \"%s\"", path);
-
-  WM_operator_last_properties_store(handler->op);
-  wm_operator_free_for_fileselect(handler->op);
-  wm_event_free_handler(&handler->head);
-
-  CTX_wm_area_set(C, nullptr);
-}
-
-static eHandlerActionFlag wm_handler_fileselect_do(bContext *C,
-                                                   ListBase *handlers,
-                                                   wmEventHandler_Op *handler,
-                                                   int val);
-
-static bool wm_ios_write_export_temp(bContext *C, wmOperator *op, char r_temp_path[FILE_MAX])
-{
-  Main *bmain = CTX_data_main(C);
-  char filename[FILE_MAXFILE] = "untitled.blend";
-
-  if (RNA_struct_find_property(op->ptr, "filepath")) {
-    char filepath[FILE_MAX];
-    RNA_string_get(op->ptr, "filepath", filepath);
-    if (filepath[0] != '\0') {
-      STRNCPY(filename, BLI_path_basename(filepath));
-    }
-  }
-
-  BLI_path_join(r_temp_path, FILE_MAX, BKE_tempdir_session(), filename);
-  BLI_path_normalize(r_temp_path);
-
-  if (STREQ(op->type->idname, "WM_OT_save_mainfile") ||
-      STREQ(op->type->idname, "WM_OT_save_as_mainfile"))
-  {
-    BlendFileWriteParams params{};
-    params.remap_mode = BLO_WRITE_PATH_REMAP_RELATIVE;
-    return BLO_write_file(bmain, r_temp_path, G.fileflags, &params, nullptr);
-  }
-
-#ifdef WITH_USD
-  if (STREQ(op->type->idname, "WM_OT_usd_export")) {
-    return ED_usd_export_operator_to_path(C, op, r_temp_path);
-  }
-#endif
-
-  RNA_string_set(op->ptr, "filepath", r_temp_path);
-  const wmOperatorStatus retval = op->type->exec(C, op);
-  return (retval & OPERATOR_FINISHED) && BLI_exists(r_temp_path);
-}
-
-static void wm_ios_file_picker_finished_cb(const char *path, bool cancelled, void *user_data)
-{
-  wmIOSFilePickerCtx *ctx = static_cast<wmIOSFilePickerCtx *>(user_data);
-  bContext *C = ctx->C;
-  wmEventHandler_Op *handler = ctx->handler;
-  ListBase *handlers = ctx->handlers;
-
-  if (cancelled || path == nullptr || path[0] == '\0') {
-    wm_handler_fileselect_do(C, handlers, handler, EVT_FILESELECT_CANCEL);
-  }
-  else if (wm_ios_fileselect_is_save_action(handler->op) &&
-           !wm_ios_operator_uses_blend_save_exec(handler->op))
-  {
-    char expected_filename[FILE_MAXFILE] = "export.usdz";
-    if (RNA_struct_find_property(handler->op->ptr, "filepath")) {
-      char filepath[FILE_MAX];
-      RNA_string_get(handler->op->ptr, "filepath", filepath);
-      if (filepath[0] != '\0') {
-        STRNCPY(expected_filename, BLI_path_basename(filepath));
-      }
-    }
-
-    char final_path[FILE_MAX];
-    if (ctx->staged_path[0] != '\0' &&
-        GHOST_IOS_commit_export_file(
-            ctx->staged_path, path, expected_filename, final_path, sizeof(final_path)))
-    {
-      wm_ios_fileselect_finish_staged_export(C, handlers, handler, final_path);
-    }
-    else {
-      wmWindowManager *wm = CTX_wm_manager(C);
-      BKE_reportf(&wm->runtime->reports,
-                  RPT_ERROR,
-                  "Failed to save export to \"%s\"",
-                  path);
-      wm_handler_fileselect_do(C, handlers, handler, EVT_FILESELECT_CANCEL);
-    }
-  }
-  else {
-    RNA_string_set(handler->op->ptr, "filepath", path);
-    WM_event_fileselect_event(CTX_wm_manager(C), handler->op, EVT_FILESELECT_EXEC);
-  }
-
-  MEM_freeN(ctx);
-}
-
-struct wmIOSExportPropsPopup {
-  wmEventHandler_Op *handler;
-};
-
-static void wm_ios_export_props_popup_free(wmIOSExportPropsPopup *data)
-{
-  MEM_freeN(data);
-}
-
-static void wm_ios_export_props_popup_block_cancel(bContext *C, void *userdata)
-{
-  wmIOSExportPropsPopup *data = static_cast<wmIOSExportPropsPopup *>(userdata);
-  WM_event_fileselect_event(CTX_wm_manager(C), data->handler->op, EVT_FILESELECT_CANCEL);
-  wm_ios_export_props_popup_free(data);
-}
-
-static void wm_ios_export_props_confirm_cb(bContext *C, void *arg1, void *arg2)
-{
-  wmIOSExportPropsPopup *data = static_cast<wmIOSExportPropsPopup *>(arg1);
-  uiBlock *block = static_cast<uiBlock *>(arg2);
-  wmEventHandler_Op *handler = data->handler;
-  wmWindowManager *wm = CTX_wm_manager(C);
-  wmWindow *root_win = wm_ios_fileselect_root_window(C, handler);
-
-  UI_popup_menu_retval_set(block, UI_RETURN_OK, true);
-  UI_popup_block_close(C, CTX_wm_window(C), block);
-
-  if (root_win != nullptr) {
-    CTX_wm_window_set(C, root_win);
-    wm_window_make_drawable(wm, root_win);
-  }
-
-  wm_ios_prepare_export_operator(C, handler->op);
-
-  ListBase *handlers = root_win != nullptr ? &root_win->modalhandlers : nullptr;
-  if (handlers == nullptr) {
-    wm_ios_show_export_failure_alert(handler->op, "No window available for export.");
-    wm_ios_export_props_popup_free(data);
-    return;
-  }
-
-  if (!wm_ios_export_to_documents_folder(C, handlers, handler)) {
-    BKE_report(&wm->runtime->reports, RPT_ERROR, "Failed to export file");
-  }
-  WM_ios_force_screen_redraw(C);
-
-  wm_ios_export_props_popup_free(data);
-}
-
-static void wm_ios_export_props_cancel_cb(bContext *C, void *arg1, void *arg2)
-{
-  wmIOSExportPropsPopup *data = static_cast<wmIOSExportPropsPopup *>(arg1);
-  uiBlock *block = static_cast<uiBlock *>(arg2);
-  UI_popup_block_close(C, CTX_wm_window(C), block);
-  WM_event_fileselect_event(CTX_wm_manager(C), data->handler->op, EVT_FILESELECT_CANCEL);
-  wm_ios_export_props_popup_free(data);
-}
-
-static uiBlock *wm_ios_export_props_popup_create(bContext *C, ARegion *region, void *user_data)
-{
-  wmIOSExportPropsPopup *data = static_cast<wmIOSExportPropsPopup *>(user_data);
-  wmOperator *op = data->handler->op;
-  const uiStyle *style = UI_style_get_dpi();
-
-  uiBlock *block = UI_block_begin(C, region, __func__, blender::ui::EmbossType::Emboss);
-  UI_block_flag_disable(block, UI_BLOCK_LOOP);
-  UI_block_flag_enable(block, UI_BLOCK_KEEP_OPEN | UI_BLOCK_NUMSELECT);
-  UI_block_theme_style_set(block, UI_BLOCK_THEME_STYLE_POPUP);
-
-  UI_popup_dummy_panel_set(region, block);
-
-  const int cancel_text_width = BLF_width(
-      style->widget.uifont_id, IFACE_("Cancel"), BLF_DRAW_STR_DUMMY_MAX);
-  const int export_text_width = BLF_width(
-      style->widget.uifont_id, IFACE_("Export"), BLF_DRAW_STR_DUMMY_MAX);
-  int dialog_width = int(420 * UI_SCALE_FAC);
-  dialog_width = std::max(dialog_width, 3 * std::max(cancel_text_width, export_text_width));
-
-  uiLayout &layout = blender::ui::block_layout(block,
-                                               blender::ui::LayoutDirection::Vertical,
-                                               blender::ui::LayoutType::Panel,
-                                               0,
-                                               0,
-                                               dialog_width,
-                                               0,
-                                               0,
-                                               style);
-
-  layout.label(WM_operatortype_name(op->type, op->ptr).c_str(), ICON_NONE);
-  layout.separator(0.3f, LayoutSeparatorType::Line);
-
-  /* Keep action buttons above the (long) USD property list so they stay visible on iOS. */
-  UI_block_func_set(block, nullptr, nullptr, nullptr);
-  uiLayout *button_col = &layout.column(false);
-  button_col->scale_y_set(1.2f);
-  uiLayout *button_split = &button_col->split(0.0f, true);
-  uiBlock *button_block = button_split->block();
-  uiBut *cancel_but = uiDefBut(button_block,
-                               ButType::But,
-                               0,
-                               IFACE_("Cancel"),
-                               0,
-                               0,
-                               0,
-                               UI_UNIT_Y,
-                               nullptr,
-                               0,
-                               0,
-                               "");
-  button_split->column(false);
-  uiBut *confirm_but = uiDefBut(button_block,
-                                ButType::But,
-                                0,
-                                IFACE_("Export"),
-                                0,
-                                0,
-                                0,
-                                UI_UNIT_Y,
-                                nullptr,
-                                0,
-                                0,
-                                "");
-  UI_but_func_set(confirm_but, wm_ios_export_props_confirm_cb, data, block);
-  UI_but_func_set(cancel_but, wm_ios_export_props_cancel_cb, data, block);
-  UI_but_flag_enable(confirm_but, UI_BUT_ACTIVE_DEFAULT);
-
-  layout.separator(0.5f);
-
-  if (RNA_struct_find_property(op->ptr, "filepath")) {
-    uiLayout *row = &layout.row(false);
-    row->prop(op->ptr, "filepath", UI_ITEM_NONE, IFACE_("File Path"), ICON_NONE);
-  }
-
-  const char *hide[] = {"filepath", "files", "directory", "filename"};
-  bool hidden_override[ARRAY_SIZE(hide)] = {false};
-  for (int i = 0; i < ARRAY_SIZE(hide); i++) {
-    PropertyRNA *prop = RNA_struct_find_property(op->ptr, hide[i]);
-    if (prop && !(RNA_property_flag(prop) & PROP_HIDDEN)) {
-      RNA_def_property_flag(prop, PROP_HIDDEN);
-      hidden_override[i] = true;
-    }
-  }
-
-  uiTemplateOperatorPropertyButs(
-      C, &layout, op, UI_BUT_LABEL_ALIGN_SPLIT_COLUMN, UI_TEMPLATE_OP_PROPS_SHOW_EMPTY);
-
-  for (int i = 0; i < ARRAY_SIZE(hide); i++) {
-    PropertyRNA *prop = RNA_struct_find_property(op->ptr, hide[i]);
-    if (prop && hidden_override[i]) {
-      RNA_def_property_clear_flag(prop, PROP_HIDDEN);
-    }
-  }
-
-  UI_block_bounds_set_centered(block, 14 * UI_SCALE_FAC);
-  return block;
-}
-
-static void wm_ios_show_export_props_popup(bContext *C, wmEventHandler_Op *handler)
-{
-  wmIOSExportPropsPopup *data = MEM_mallocN<wmIOSExportPropsPopup>(__func__);
-  data->handler = handler;
-  UI_popup_block_ex(C,
-                    wm_ios_export_props_popup_create,
-                    nullptr,
-                    wm_ios_export_props_popup_block_cancel,
-                    data,
-                    nullptr);
-}
-
-static bool wm_ios_export_to_documents_folder(bContext *C,
-                                              ListBase *handlers,
-                                              wmEventHandler_Op *handler)
-{
-  wm_ios_prepare_export_operator(C, handler->op);
-
-  char expected_filename[FILE_MAXFILE] = "Untitled.usdz";
-  if (RNA_struct_find_property(handler->op->ptr, "filepath")) {
-    char filepath[FILE_MAX];
-    RNA_string_get(handler->op->ptr, "filepath", filepath);
-    if (filepath[0] != '\0') {
-      STRNCPY(expected_filename, BLI_path_basename(filepath));
-    }
-  }
-
-  char final_path[FILE_MAX];
-  if (!GHOST_IOS_documents_export_filepath(
-          expected_filename, final_path, sizeof(final_path)))
-  {
-    GHOST_IOS_show_native_alert("Export failed", "Could not access the Exports folder.");
-    return false;
-  }
-
-#ifdef WITH_USD
-  if (STREQ(handler->op->type->idname, "WM_OT_usd_export")) {
-    fprintf(stderr, "[ios] USD export directly to %s\n", final_path);
-    fflush(stderr);
-
-    if (!ED_usd_export_operator_to_path(C, handler->op, final_path)) {
-      wm_ios_show_export_failure_alert(handler->op, "USD export failed.");
-      return false;
-    }
-
-    if (!BLI_exists(final_path)) {
-      wm_ios_show_export_failure_alert(
-          handler->op, "USD export finished but the output file was not created.");
-      return false;
-    }
-
-    wm_ios_fileselect_finish_staged_export(C, handlers, handler, final_path);
-
-    char alert_message[256];
-    SNPRINTF(alert_message,
-             "Saved to Files app > Blender > Exports > %s",
-             expected_filename);
-    GHOST_IOS_show_native_alert("Export complete", alert_message);
-    return true;
-  }
-#endif
-
-  char staged_path[FILE_MAX];
-  if (!wm_ios_write_export_temp(C, handler->op, staged_path)) {
-    wm_ios_show_export_failure_alert(
-        handler->op,
-        "Could not create the export file. Check the Info editor for details.");
-    return false;
-  }
-
-  if (!GHOST_IOS_save_staged_export_to_documents(
-          staged_path, expected_filename, final_path, sizeof(final_path)))
-  {
-    wm_ios_show_export_failure_alert(
-        handler->op,
-        "Could not save to the Files app. Check the Info editor for details.");
-    BLI_delete(staged_path, false, false);
-    return false;
-  }
-
-  BLI_delete(staged_path, false, false);
-
-  wm_ios_fileselect_finish_staged_export(C, handlers, handler, final_path);
-
-  char alert_message[256];
-  SNPRINTF(alert_message,
-           "Saved to Files app > Blender > Exports > %s",
-           expected_filename);
-  GHOST_IOS_show_native_alert("Export complete", alert_message);
-  return true;
-}
-
-static bool wm_ios_present_file_picker(bContext *C,
-                                       ListBase *handlers,
-                                       wmEventHandler_Op *handler,
-                                       const bool is_save)
-{
-  wmIOSFilePickerCtx *ctx = MEM_mallocN<wmIOSFilePickerCtx>(__func__);
-  ctx->C = C;
-  ctx->handlers = handlers;
-  ctx->handler = handler;
-  ctx->staged_path[0] = '\0';
-
-  if (is_save) {
-    char temp_path[FILE_MAX];
-    if (!wm_ios_write_export_temp(C, handler->op, temp_path)) {
-      wmWindowManager *wm = CTX_wm_manager(C);
-      BKE_report(&wm->runtime->reports, RPT_ERROR, "Failed to prepare file for export");
-      MEM_freeN(ctx);
-      return false;
-    }
-    STRNCPY(ctx->staged_path, temp_path);
-    if (GHOST_IOS_present_export_document_picker(
-            temp_path, wm_ios_file_picker_finished_cb, ctx))
-    {
-      return true;
-    }
-    wmWindowManager *wm = CTX_wm_manager(C);
-    BKE_report(&wm->runtime->reports, RPT_ERROR, "Failed to open export destination picker");
-  }
-  else if (GHOST_IOS_present_open_document_picker(wm_ios_file_picker_finished_cb, ctx)) {
-    return true;
-  }
-
-  MEM_freeN(ctx);
-  return false;
-}
-
-#endif /* WITH_APPLE_CROSSPLATFORM && TARGET_OS_IPHONE */
-
 /**
  * File-select handlers are only in the window queue,
  * so it's safe to switch screens or area types.
@@ -3351,35 +2817,8 @@ static eHandlerActionFlag wm_handler_fileselect_do(bContext *C,
 
   switch (val) {
     case EVT_FILESELECT_FULL_OPEN: {
-#if defined(WITH_APPLE_CROSSPLATFORM) && defined(__APPLE__) && defined(TARGET_OS_IPHONE) && \
-    TARGET_OS_IPHONE
-      const bool ios_is_save = wm_ios_fileselect_is_save_action(handler->op);
-      const bool ios_export_with_props = ios_is_save && wm_ios_fileselect_shows_props(handler->op);
-      /* Save operators with an in-app properties panel (e.g. USD export) need the file browser
-       * UI first; the Files destination picker runs on #EVT_FILESELECT_EXEC. */
-      const bool ios_use_picker_first = !ios_is_save || !wm_ios_fileselect_shows_props(handler->op);
-
-      if (!G.background && ios_export_with_props) {
-        wm_ios_show_export_props_popup(C, handler);
-        action = WM_HANDLER_BREAK;
-        break;
-      }
-
-      if (!G.background && ios_use_picker_first &&
-          wm_ios_present_file_picker(C, handlers, handler, ios_is_save))
-      {
-        action = WM_HANDLER_BREAK;
-        break;
-      }
-#endif
-      int filebrowser_display = U.filebrowser_display_type;
-#if defined(WITH_APPLE_CROSSPLATFORM) && defined(__APPLE__) && defined(TARGET_OS_IPHONE) && \
-    TARGET_OS_IPHONE
-      /* Separate GHOST windows are not usable on iOS; always stack fullscreen in-window. */
-      filebrowser_display = USER_TEMP_SPACE_DISPLAY_FULLSCREEN;
-#endif
       ScrArea *area = ED_screen_temp_space_open(
-          C, IFACE_("Blender File View"), SPACE_FILE, filebrowser_display, true);
+          C, IFACE_("Blender File View"), SPACE_FILE, U.filebrowser_display_type, true);
       if (!area) {
         BKE_report(&wm->runtime->reports, RPT_ERROR, "Failed to open file browser!");
         return WM_HANDLER_BREAK;
@@ -3398,11 +2837,6 @@ static eHandlerActionFlag wm_handler_fileselect_do(bContext *C,
 
       ED_fileselect_set_params_from_userdef(sfile);
 
-#if defined(WITH_APPLE_CROSSPLATFORM) && defined(__APPLE__) && defined(TARGET_OS_IPHONE) && \
-    TARGET_OS_IPHONE
-      WM_ios_force_screen_redraw(C);
-#endif
-
       action = WM_HANDLER_BREAK;
       break;
     }
@@ -3414,27 +2848,6 @@ static eHandlerActionFlag wm_handler_fileselect_do(bContext *C,
       wmEvent *eventstate = ctx_win->eventstate;
       /* The root window of the operation as determined in #WM_event_add_fileselect(). */
       wmWindow *root_win = handler->context.win;
-
-#if defined(WITH_APPLE_CROSSPLATFORM) && defined(__APPLE__) && defined(TARGET_OS_IPHONE) && \
-    TARGET_OS_IPHONE
-      if (val == EVT_FILESELECT_EXEC && !G.background &&
-          wm_ios_fileselect_is_save_action(handler->op) &&
-          !wm_ios_operator_uses_blend_save_exec(handler->op))
-      {
-        wmWindow *root_win = wm_ios_fileselect_root_window(C, handler);
-        if (root_win != nullptr) {
-          CTX_wm_window_set(C, root_win);
-          wm_window_make_drawable(wm, root_win);
-        }
-
-        if (wm_ios_export_to_documents_folder(C, handlers, handler)) {
-          WM_ios_force_screen_redraw(C);
-          return WM_HANDLER_BREAK;
-        }
-        BKE_report(&wm->runtime->reports, RPT_ERROR, "Failed to export file");
-        return WM_HANDLER_BREAK;
-      }
-#endif
 
       /* Remove link now, for load file case before removing. */
       BLI_remlink(handlers, handler);
@@ -4473,13 +3886,7 @@ static eHandlerActionFlag wm_event_drag_and_drop_test(wmWindowManager *wm,
                                                       wmWindow *win,
                                                       wmEvent *event)
 {
-  if (wm == nullptr || wm->runtime == nullptr) {
-    return WM_HANDLER_CONTINUE;
-  }
   bScreen *screen = WM_window_get_active_screen(win);
-  if (screen == nullptr) {
-    return WM_HANDLER_CONTINUE;
-  }
 
   if (BLI_listbase_is_empty(&wm->runtime->drags)) {
     return WM_HANDLER_CONTINUE;
@@ -4688,11 +4095,7 @@ static eHandlerActionFlag wm_event_do_handlers_area_regions(bContext *C,
 
 void wm_event_do_handlers(bContext *C)
 {
-  wm_context_ensure_from_main(C);
   wmWindowManager *wm = CTX_wm_manager(C);
-  if (wm == nullptr) {
-    return;
-  }
   BLI_assert(ED_undo_is_state_valid(C));
 
   /* Begin GPU render boundary - Certain event handlers require GPU usage. */
@@ -4703,22 +4106,63 @@ void wm_event_do_handlers(bContext *C)
   WM_gizmoconfig_update(CTX_data_main(C));
 
   LISTBASE_FOREACH (wmWindow *, win, &wm->windows) {
-    if (win->runtime == nullptr) {
-      continue;
-    }
     bScreen *screen = WM_window_get_active_screen(win);
-    Scene *win_scene = WM_window_get_active_scene(win);
-    WorkSpace *win_workspace = WM_window_get_active_workspace(win);
 
-    /* Normally always set; embedded startup can lag wiring until #ED_screens_init completes. */
-    if (win_scene == nullptr || screen == nullptr || win_workspace == nullptr) {
+    /* Some safety checks - these should always be set! */
+    BLI_assert(WM_window_get_active_scene(win));
+    BLI_assert(WM_window_get_active_screen(win));
+    BLI_assert(WM_window_get_active_workspace(win));
+
+    if (screen == nullptr) {
       wm_event_free_all(win);
-      continue;
     }
 
     wmEvent *event;
     while ((event = static_cast<wmEvent *>(win->runtime->event_queue.first))) {
       eHandlerActionFlag action = WM_HANDLER_CONTINUE;
+#if defined(WITH_APPLE_CROSSPLATFORM)
+      if (ELEM(event->type, MOUSEMOVE, INBETWEEN_MOUSEMOVE)) {
+        bool has_pending_button = false;
+        LISTBASE_FOREACH (wmEvent *, queued_event, &win->runtime->event_queue) {
+          if (ISMOUSE_BUTTON(queued_event->type)) {
+            has_pending_button = true;
+            break;
+          }
+        }
+        if (has_pending_button) {
+          fprintf(stderr, "[ios-wm] drop-front-move for pending button qsize=%d\n",
+                  BLI_listbase_count(&win->runtime->event_queue));
+          fflush(stderr);
+          BLI_remlink(&win->runtime->event_queue, event);
+          wm_event_free_last_handled(win, event);
+          continue;
+        }
+      }
+
+      const int queue_size_now = BLI_listbase_count(&win->runtime->event_queue);
+      /* iOS emergency flood-control:
+       * When WM stalls temporarily (e.g. Python/UI hiccups), motion events can flood the queue and
+       * starve button processing. Drop stale moves aggressively to keep taps responsive. */
+      if (queue_size_now > 12 && event->type == MOUSEMOVE) {
+        fprintf(stderr, "[ios-wm] drop-move qsize=%d xy=(%d,%d)\n", queue_size_now, event->xy[0], event->xy[1]);
+        fflush(stderr);
+        BLI_remlink(&win->runtime->event_queue, event);
+        wm_event_free_last_handled(win, event);
+        continue;
+      }
+#endif
+#if defined(WITH_APPLE_CROSSPLATFORM)
+      if (ISMOUSE_BUTTON(event->type) || event->type == MOUSEMOVE) {
+        fprintf(stderr,
+                "[ios-wm] handle-begin type=%d val=%d xy=(%d,%d) qsize=%d\n",
+                event->type,
+                event->val,
+                event->xy[0],
+                event->xy[1],
+                BLI_listbase_count(&win->runtime->event_queue));
+        fflush(stderr);
+      }
+#endif
 
       /* Force handling drag if a key is pressed even if the drag threshold has not been met.
        * Needed so tablet actions (which typically use a larger threshold) can click-drag
@@ -4920,6 +4364,18 @@ void wm_event_do_handlers(bContext *C)
       if (event_queue_check_drag_prev && (win->event_queue_check_drag == false)) {
         wm_region_tag_draw_on_gizmo_delay_refresh_for_tweak(win);
       }
+#if defined(WITH_APPLE_CROSSPLATFORM)
+      if (ISMOUSE_BUTTON(event->type) || event->type == MOUSEMOVE) {
+        fprintf(stderr,
+                "[ios-wm] handle-end type=%d val=%d action=0x%x break=%d qsize=%d\n",
+                event->type,
+                event->val,
+                action,
+                (action & WM_HANDLER_BREAK) != 0,
+                BLI_listbase_count(&win->runtime->event_queue));
+        fflush(stderr);
+      }
+#endif
 
       /* Update previous mouse position for following events to use. */
       copy_v2_v2_int(win->eventstate->prev_xy, event->xy);
@@ -6487,9 +5943,6 @@ static bool wm_event_is_same_key_press(const wmEvent &event_a, const wmEvent &ev
  */
 static bool wm_event_is_ignorable_key_press(const wmWindow *win, const wmEvent &event)
 {
-  if (win->runtime == nullptr) {
-    return false;
-  }
   if (BLI_listbase_is_empty(&win->runtime->event_queue)) {
     /* If the queue is empty never ignore the event.
      * Empty queue at this point means that the events are handled fast enough, and there is no
@@ -6510,6 +5963,34 @@ static bool wm_event_is_ignorable_key_press(const wmWindow *win, const wmEvent &
   const wmEvent &last_event = *static_cast<const wmEvent *>(win->runtime->event_queue.last);
 
   return wm_event_is_same_key_press(last_event, event);
+}
+
+static bool wm_event_trace_ios_enabled()
+{
+  static int enabled = -1;
+  if (enabled == -1) {
+    const char *env = std::getenv("BLENDER_IOS_EVENT_TRACE");
+    enabled = ((env != nullptr) && (env[0] != '\0') && (env[0] != '0')) ? 1 : 0;
+  }
+  return enabled == 1;
+}
+
+static const char *wm_ghost_event_type_label(const int type)
+{
+  switch (type) {
+    case GHOST_kEventCursorMove:
+      return "GHOST_kEventCursorMove";
+    case GHOST_kEventButtonDown:
+      return "GHOST_kEventButtonDown";
+    case GHOST_kEventButtonUp:
+      return "GHOST_kEventButtonUp";
+    case GHOST_kEventTrackpad:
+      return "GHOST_kEventTrackpad";
+    case GHOST_kEventTouch:
+      return "GHOST_kEventTouch";
+    default:
+      return "GHOST_kEventOther";
+  }
 }
 
 void wm_event_add_ghostevent(wmWindowManager *wm,
@@ -6534,6 +6015,27 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
    */
   wmEvent event, *event_state = win->eventstate;
   uint64_t *event_state_prev_press_time_ms_p = &win->eventstate_prev_press_time_ms;
+  const bool trace_ios = wm_event_trace_ios_enabled();
+  const int queue_size_before = trace_ios ? BLI_listbase_count(&win->runtime->event_queue) : -1;
+
+  if (trace_ios && ELEM(type, GHOST_kEventCursorMove, GHOST_kEventButtonDown, GHOST_kEventButtonUp)) {
+    CLOG_INFO(WM_LOG_EVENTS,
+              0,
+              "[ios-trace] recv %s time=%llu queue_before=%d",
+              wm_ghost_event_type_label(type),
+              (unsigned long long)event_time_ms,
+              queue_size_before);
+  }
+#if defined(WITH_APPLE_CROSSPLATFORM)
+  if (ELEM(type, GHOST_kEventButtonDown, GHOST_kEventButtonUp)) {
+    fprintf(stderr,
+            "[ios-wm] ghostrecv type=%d time=%llu queue_before=%d\n",
+            type,
+            (unsigned long long)event_time_ms,
+            BLI_listbase_count(&win->runtime->event_queue));
+    fflush(stderr);
+  }
+#endif
 
   /* Initialize and copy state (only mouse x y and modifiers). */
   event = *event_state;
@@ -6586,9 +6088,6 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
     /* Mouse move, also to inactive window (X11 does this). */
     case GHOST_kEventCursorMove: {
       const GHOST_TEventCursorData *cd = static_cast<const GHOST_TEventCursorData *>(customdata);
-      if (UNLIKELY(cd == nullptr)) {
-        break;
-      }
 
       copy_v2_v2_int(event.xy, &cd->x);
       wm_cursor_position_from_ghost_screen_coords(win, &event.xy[0], &event.xy[1]);
@@ -6603,6 +6102,16 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
         copy_v2_v2_int(event_state->xy, event_new->xy);
         event_state->tablet.is_motion_absolute = event_new->tablet.is_motion_absolute;
         event_state->tablet.tilt = event.tablet.tilt;
+        if (trace_ios) {
+          CLOG_INFO(WM_LOG_EVENTS,
+                    0,
+                    "[ios-trace] enqueue MOUSEMOVE xy=(%d,%d) prev=(%d,%d) queue_after=%d",
+                    event_new->xy[0],
+                    event_new->xy[1],
+                    event_new->prev_xy[0],
+                    event_new->prev_xy[1],
+                    BLI_listbase_count(&win->runtime->event_queue));
+        }
       }
 
       /* Also add to other window if event is there, this makes overdraws disappear nicely. */
@@ -6634,9 +6143,6 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
     case GHOST_kEventTrackpad: {
       const GHOST_TEventTrackpadData *pd = static_cast<const GHOST_TEventTrackpadData *>(
           customdata);
-      if (UNLIKELY(pd == nullptr)) {
-        break;
-      }
 
       int delta[2] = {pd->deltaX, -pd->deltaY};
       switch (pd->subtype) {
@@ -6697,9 +6203,6 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
     /* Multi-touch. */
     case GHOST_kEventTouch: {
       const GHOST_TEventTouchData *td = static_cast<const GHOST_TEventTouchData *>(customdata);
-      if (UNLIKELY(td == nullptr)) {
-        break;
-      }
       switch (td->subtype) {
         case GHOST_kTouchEventEdgeSwipeInLeft:
           event.type = TOUCH_EDGE_SWIPE_IN_LEFT;
@@ -6735,9 +6238,6 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
     case GHOST_kEventButtonDown:
     case GHOST_kEventButtonUp: {
       const GHOST_TEventButtonData *bd = static_cast<const GHOST_TEventButtonData *>(customdata);
-      if (UNLIKELY(bd == nullptr)) {
-        break;
-      }
 
       /* Get value and type from GHOST.
        *
@@ -6776,9 +6276,58 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
         event_other.tablet = event.tablet;
 
         wm_event_add_intern(win_other, &event_other);
+        if (trace_ios) {
+          CLOG_INFO(WM_LOG_EVENTS,
+                    0,
+                    "[ios-trace] route-other type=%d val=%d xy=(%d,%d)",
+                    event_other.type,
+                    event_other.val,
+                    event_other.xy[0],
+                    event_other.xy[1]);
+        }
       }
       else {
+#if defined(WITH_APPLE_CROSSPLATFORM)
+        /* Emergency queue hygiene for iOS:
+         * If UI/Python stalls, stale MOUSEMOVE events can flood the queue and delay tap handling.
+         * Drop pending motion events right before enqueuing button press/release. */
+        int dropped_moves = 0;
+        LISTBASE_FOREACH_MUTABLE (wmEvent *, queued_event, &win->runtime->event_queue) {
+          if (ELEM(queued_event->type, MOUSEMOVE, INBETWEEN_MOUSEMOVE)) {
+            BLI_remlink(&win->runtime->event_queue, queued_event);
+            wm_event_free(queued_event);
+            dropped_moves++;
+          }
+        }
+        if (dropped_moves > 0) {
+          fprintf(stderr, "[ios-wm] prune-move before button dropped=%d\n", dropped_moves);
+          fflush(stderr);
+        }
+#endif
         wm_event_add_intern(win, &event);
+#if defined(WITH_APPLE_CROSSPLATFORM)
+        fprintf(stderr,
+                "[ios-wm] enqueue button type=%d val=%d xy=(%d,%d) queue_after=%d\n",
+                event.type,
+                event.val,
+                event.xy[0],
+                event.xy[1],
+                BLI_listbase_count(&win->runtime->event_queue));
+        fflush(stderr);
+#endif
+        if (trace_ios) {
+          CLOG_INFO(WM_LOG_EVENTS,
+                    0,
+                    "[ios-trace] enqueue button type=%d val=%d prev_type=%d prev_val=%d xy=(%d,%d) "
+                    "queue_after=%d",
+                    event.type,
+                    event.val,
+                    event.prev_type,
+                    event.prev_val,
+                    event.xy[0],
+                    event.xy[1],
+                    BLI_listbase_count(&win->runtime->event_queue));
+        }
       }
 
       break;
@@ -6787,9 +6336,6 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
     case GHOST_kEventKeyDown:
     case GHOST_kEventKeyUp: {
       const GHOST_TEventKeyData *kd = static_cast<const GHOST_TEventKeyData *>(customdata);
-      if (UNLIKELY(kd == nullptr)) {
-        break;
-      }
       event.type = wm_event_type_from_ghost_key(kd->key);
       if (UNLIKELY(event.type == EVENT_NONE)) {
         break;
@@ -7000,9 +6546,6 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
 
 #ifdef WITH_INPUT_NDOF
     case GHOST_kEventNDOFMotion: {
-      if (UNLIKELY(customdata == nullptr)) {
-        break;
-      }
       event.type = NDOF_MOTION;
       event.val = KM_NOTHING;
       attach_ndof_data(&event, static_cast<const GHOST_TEventNDOFMotionData *>(customdata));
@@ -7015,9 +6558,6 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
     case GHOST_kEventNDOFButton: {
       const GHOST_TEventNDOFButtonData *e = static_cast<const GHOST_TEventNDOFButtonData *>(
           customdata);
-      if (UNLIKELY(e == nullptr)) {
-        break;
-      }
       event.type = wm_event_type_from_ndof_button(static_cast<GHOST_NDOF_ButtonT>(e->button));
 
       switch (e->action) {
@@ -7292,9 +6832,6 @@ const char *WM_window_cursor_keymap_status_get(const wmWindow *win,
 
 ScrArea *WM_window_status_area_find(wmWindow *win, bScreen *screen)
 {
-  if (win == nullptr || screen == nullptr) {
-    return nullptr;
-  }
   if (screen->state == SCREENFULL) {
     return nullptr;
   }

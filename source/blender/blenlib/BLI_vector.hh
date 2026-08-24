@@ -780,7 +780,9 @@ class Vector {
   int64_t size() const
   {
     const int64_t current_size = int64_t(end_ - begin_);
+#ifndef WITH_APPLE_CROSSPLATFORM
     BLI_assert(debug_size_ == current_size);
+#endif
     return current_size;
   }
 

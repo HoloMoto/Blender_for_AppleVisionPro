@@ -6,8 +6,10 @@
  * \ingroup RNA
  */
 
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <sstream>
@@ -71,7 +73,123 @@
 #include "rna_access_internal.hh"
 #include "rna_internal.hh"
 
+#if defined(WITH_APPLE_CROSSPLATFORM) && defined(__APPLE__)
+#  include <mach/mach.h>
+#  include <mach/vm_map.h>
+#endif
+
 static CLG_LogRef LOG = {"rna.access"};
+
+#if defined(WITH_APPLE_CROSSPLATFORM) && defined(__APPLE__)
+/**
+ * Print a C string for logging without faulting on invalid pointers (iOS).
+ * Uses `vm_read_overwrite` so bad user-space addresses do not hit `strlen` in libc `*printf`.
+ */
+static void rna_apple_fputs_cstr_safe(FILE *file, const char *s)
+{
+  if (s == nullptr) {
+    fputs("null", file);
+    return;
+  }
+  if (UNLIKELY(uintptr_t(s) < 4096)) {
+    std::fprintf(file, "lowptr(%p)", (const void *)s);
+    return;
+  }
+
+  char buf[512];
+  vm_size_t out_size = sizeof(buf) - 1;
+  const kern_return_t kr = vm_read_overwrite(mach_task_self(),
+                                             reinterpret_cast<vm_address_t>(s),
+                                             sizeof(buf) - 1,
+                                             reinterpret_cast<vm_address_t>(buf),
+                                             &out_size);
+  if (kr != KERN_SUCCESS || out_size == 0) {
+    std::fprintf(file, "unmapped(%p)", (const void *)s);
+    return;
+  }
+
+  size_t end = out_size;
+  for (size_t i = 0; i < out_size; i++) {
+    if (buf[i] == '\0') {
+      end = i;
+      break;
+    }
+  }
+  buf[end] = '\0';
+  fputs(buf, file);
+}
+
+static void rna_apple_safe_vfprintf(FILE *file, const char *format, va_list args)
+{
+  for (const char *p = format; *p != '\0';) {
+    if (*p != '%') {
+      fputc(int(*p), file);
+      p++;
+      continue;
+    }
+    p++;
+    if (*p == '\0') {
+      break;
+    }
+    if (*p == '%') {
+      fputc('%', file);
+      p++;
+      continue;
+    }
+    if (*p == 'l' && (p[1] == 'd' || p[1] == 'i')) {
+      const long v = va_arg(args, long);
+      std::fprintf(file, "%ld", v);
+      p += 2;
+      continue;
+    }
+    if (*p == 'l' && p[1] == 'u') {
+      const unsigned long v = va_arg(args, unsigned long);
+      std::fprintf(file, "%lu", v);
+      p += 2;
+      continue;
+    }
+
+    switch (*p) {
+      case 's': {
+        const char *s = va_arg(args, const char *);
+        rna_apple_fputs_cstr_safe(file, s);
+        p++;
+        break;
+      }
+      case 'd':
+      case 'i': {
+        const int v = va_arg(args, int);
+        std::fprintf(file, "%d", v);
+        p++;
+        break;
+      }
+      case 'u': {
+        const unsigned int v = va_arg(args, unsigned int);
+        std::fprintf(file, "%u", v);
+        p++;
+        break;
+      }
+      case 'c': {
+        const int c = va_arg(args, int);
+        std::fprintf(file, "%c", c);
+        p++;
+        break;
+      }
+      case 'p': {
+        void *v = va_arg(args, void *);
+        std::fprintf(file, "%p", v);
+        p++;
+        break;
+      }
+      default:
+        fputc('%', file);
+        fputc(int(*p), file);
+        p++;
+        break;
+    }
+  }
+}
+#endif /* WITH_APPLE_CROSSPLATFORM && __APPLE__ */
 
 /* Init/Exit */
 
@@ -632,6 +750,9 @@ IDProperty *rna_idproperty_check(PropertyRNA **prop, PointerRNA *ptr)
 PropertyRNA *rna_ensure_property(PropertyRNA *prop)
 {
   /* the quick version if we don't need the idproperty */
+  if (UNLIKELY(prop == nullptr)) {
+    return nullptr;
+  }
 
   if (prop->magic == RNA_MAGIC) {
     return prop;
@@ -657,6 +778,9 @@ PropertyRNA *rna_ensure_property(PropertyRNA *prop)
 
 static const char *rna_ensure_property_identifier(const PropertyRNA *prop)
 {
+  if (UNLIKELY(prop == nullptr)) {
+    return "<null>";
+  }
   if (prop->magic == RNA_MAGIC) {
     return prop->identifier;
   }
@@ -665,6 +789,9 @@ static const char *rna_ensure_property_identifier(const PropertyRNA *prop)
 
 static const char *rna_ensure_property_description(const PropertyRNA *prop)
 {
+  if (UNLIKELY(prop == nullptr)) {
+    return "";
+  }
   if (prop->magic == RNA_MAGIC) {
     return prop->description;
   }
@@ -701,6 +828,9 @@ StructRNA *RNA_struct_find(const char *identifier)
 
 const char *RNA_struct_identifier(const StructRNA *type)
 {
+  if (UNLIKELY(type == nullptr)) {
+    return "<null struct>";
+  }
   return type->identifier;
 }
 
@@ -812,6 +942,10 @@ bool RNA_struct_is_a(const StructRNA *type, const StructRNA *srna)
 {
   const StructRNA *base;
 
+  if (UNLIKELY(srna == nullptr)) {
+    return false;
+  }
+
   if (srna == &RNA_AnyType) {
     return true;
   }
@@ -819,9 +953,19 @@ bool RNA_struct_is_a(const StructRNA *type, const StructRNA *srna)
   if (!type) {
     return false;
   }
+#ifdef WITH_APPLE_CROSSPLATFORM
+  if (UNLIKELY(uintptr_t(type) < 4096 || uintptr_t(srna) < 4096)) {
+    return false;
+  }
+#endif
 
   /* ptr->type is always maximally refined */
   for (base = type; base; base = base->base) {
+#ifdef WITH_APPLE_CROSSPLATFORM
+    if (UNLIKELY(uintptr_t(base) < 4096)) {
+      return false;
+    }
+#endif
     if (base == srna) {
       return true;
     }
@@ -832,6 +976,20 @@ bool RNA_struct_is_a(const StructRNA *type, const StructRNA *srna)
 
 PropertyRNA *RNA_struct_find_property(PointerRNA *ptr, const char *identifier)
 {
+  if (UNLIKELY(ptr == nullptr || ptr->type == nullptr || identifier == nullptr)) {
+    return nullptr;
+  }
+
+  /* Defensive guard against clearly invalid pointers seen in iOS startup (`identifier == 0x1`). */
+  if (UNLIKELY(size_t(identifier) < 4096)) {
+    return nullptr;
+  }
+
+  if (UNLIKELY(identifier[0] == '\0'))
+  {
+    return nullptr;
+  }
+
   if (identifier[0] == '[' && identifier[1] == '"') {
     /* id prop lookup, not so common */
     PropertyRNA *r_prop = nullptr;
@@ -845,6 +1003,9 @@ PropertyRNA *RNA_struct_find_property(PointerRNA *ptr, const char *identifier)
   else {
     /* most common case */
     PropertyRNA *iterprop = RNA_struct_iterator_property(ptr->type);
+    if (UNLIKELY(iterprop == nullptr)) {
+      return nullptr;
+    }
     PointerRNA propptr;
 
     if (RNA_property_collection_lookup_string(ptr, iterprop, identifier, &propptr)) {
@@ -1086,9 +1247,25 @@ StructUnregisterFunc RNA_struct_unregister(StructRNA *type)
 
 void **RNA_struct_instance(PointerRNA *ptr)
 {
+  if (UNLIKELY(ptr == nullptr)) {
+    return nullptr;
+  }
   StructRNA *type = ptr->type;
+  if (UNLIKELY(type == nullptr)) {
+    return nullptr;
+  }
+#ifdef WITH_APPLE_CROSSPLATFORM
+  if (UNLIKELY(uintptr_t(type) < 4096)) {
+    return nullptr;
+  }
+#endif
 
   do {
+#ifdef WITH_APPLE_CROSSPLATFORM
+    if (UNLIKELY(uintptr_t(type) < 4096)) {
+      return nullptr;
+    }
+#endif
     if (type->instance) {
       return type->instance(ptr);
     }
@@ -1245,12 +1422,19 @@ const DeprecatedRNA *RNA_property_deprecated(const PropertyRNA *prop)
 
 PropertyType RNA_property_type(PropertyRNA *prop)
 {
-  return rna_ensure_property(prop)->type;
+  PropertyRNA *rna_prop = rna_ensure_property(prop);
+  return rna_prop ? rna_prop->type : PropertyType(PROP_NONE);
 }
 
 PropertySubType RNA_property_subtype(PropertyRNA *prop)
 {
+  if (UNLIKELY(prop == nullptr)) {
+    return PropertySubType(PROP_NONE);
+  }
   PropertyRNA *rna_prop = rna_ensure_property(prop);
+  if (UNLIKELY(rna_prop == nullptr)) {
+    return PropertySubType(PROP_NONE);
+  }
 
   /* For custom properties, find and parse the 'subtype' metadata field. */
   if (prop->magic != RNA_MAGIC) {
@@ -1277,6 +1461,9 @@ PropertyUnit RNA_property_unit(PropertyRNA *prop)
 PropertyScaleType RNA_property_ui_scale(PropertyRNA *prop)
 {
   PropertyRNA *rna_prop = rna_ensure_property(prop);
+  if (UNLIKELY(rna_prop == nullptr)) {
+    return PROP_SCALE_LINEAR;
+  }
 
   switch (rna_prop->type) {
     case PROP_INT: {
@@ -1294,22 +1481,26 @@ PropertyScaleType RNA_property_ui_scale(PropertyRNA *prop)
 
 int RNA_property_flag(PropertyRNA *prop)
 {
-  return rna_ensure_property(prop)->flag;
+  PropertyRNA *rna_prop = rna_ensure_property(prop);
+  return rna_prop ? rna_prop->flag : 0;
 }
 
 int RNA_property_tags(PropertyRNA *prop)
 {
-  return rna_ensure_property(prop)->tags;
+  PropertyRNA *rna_prop = rna_ensure_property(prop);
+  return rna_prop ? rna_prop->tags : 0;
 }
 
 PropertyPathTemplateType RNA_property_path_template_type(PropertyRNA *prop)
 {
-  return rna_ensure_property(prop)->path_template_type;
+  PropertyRNA *rna_prop = rna_ensure_property(prop);
+  return rna_prop ? rna_prop->path_template_type : PropertyPathTemplateType(0);
 }
 
 bool RNA_property_builtin(PropertyRNA *prop)
 {
-  return (rna_ensure_property(prop)->flag_internal & PROP_INTERN_BUILTIN) != 0;
+  PropertyRNA *rna_prop = rna_ensure_property(prop);
+  return rna_prop ? ((rna_prop->flag_internal & PROP_INTERN_BUILTIN) != 0) : false;
 }
 
 void *RNA_property_py_data_get(PropertyRNA *prop)
@@ -3997,13 +4188,16 @@ static size_t property_string_length_storage(PointerRNA *ptr, PropertyRNAOrID &p
   }
 
   StringPropertyRNA *sprop = reinterpret_cast<StringPropertyRNA *>(prop_rna_or_id.rnaprop);
+  if (UNLIKELY(sprop == nullptr)) {
+    return 0;
+  }
   if (sprop->length) {
     return sprop->length(ptr);
   }
   if (sprop->length_ex) {
     return size_t(sprop->length_ex(ptr, &sprop->property));
   }
-  return strlen(sprop->defaultvalue);
+  return sprop->defaultvalue ? strlen(sprop->defaultvalue) : 0;
 }
 
 static std::string property_string_get(PointerRNA *ptr, PropertyRNAOrID &prop_rna_or_id)
@@ -4013,6 +4207,9 @@ static std::string property_string_get(PointerRNA *ptr, PropertyRNAOrID &prop_rn
     return std::string{IDP_String(prop_rna_or_id.idprop), length};
   }
   StringPropertyRNA *sprop = reinterpret_cast<StringPropertyRNA *>(prop_rna_or_id.rnaprop);
+  if (UNLIKELY(sprop == nullptr)) {
+    return {};
+  }
   if (sprop->get) {
     const size_t length = property_string_length_storage(ptr, prop_rna_or_id);
     /* Note: after `resize()` the underlying buffer is actually at least
@@ -4027,7 +4224,7 @@ static std::string property_string_get(PointerRNA *ptr, PropertyRNAOrID &prop_rn
   if (sprop->get_ex) {
     return sprop->get_ex(ptr, &sprop->property);
   }
-  return sprop->defaultvalue;
+  return sprop->defaultvalue ? sprop->defaultvalue : "";
 }
 
 std::string RNA_property_string_get(PointerRNA *ptr, PropertyRNA *prop)
@@ -4694,8 +4891,12 @@ void RNA_property_collection_begin(PointerRNA *ptr,
                                    CollectionPropertyIterator *iter)
 {
   IDProperty *idprop;
+  const PropertyType prop_type = RNA_property_type(prop);
 
-  BLI_assert(RNA_property_type(prop) == PROP_COLLECTION);
+  if (UNLIKELY(prop_type != PROP_COLLECTION)) {
+    *iter = {};
+    return;
+  }
 
   *iter = {};
 
@@ -4767,6 +4968,10 @@ void RNA_property_collection_skip(CollectionPropertyIterator *iter, int num)
 void RNA_property_collection_end(CollectionPropertyIterator *iter)
 {
   CollectionPropertyRNA *cprop = (CollectionPropertyRNA *)rna_ensure_property(iter->prop);
+  if (UNLIKELY(cprop == nullptr)) {
+    *iter = {};
+    return;
+  }
 
   if (iter->idprop) {
     rna_iterator_array_end(iter);
@@ -7386,9 +7591,29 @@ void _RNA_warning(const char *format, ...)
 {
   va_list args;
 
-  va_start(args, format);
-  vprintf(format, args);
-  va_end(args);
+  if (format == nullptr) {
+    fputs("RNA warning\n", stdout);
+  }
+#if defined(WITH_APPLE_CROSSPLATFORM) && defined(__APPLE__)
+  else {
+    va_start(args, format);
+    rna_apple_safe_vfprintf(stdout, format, args);
+    va_end(args);
+  }
+#else
+  else {
+    char buf[4096];
+    va_start(args, format);
+    const int n = std::vsnprintf(buf, int(sizeof(buf)), format, args);
+    va_end(args);
+    if (n < 0) {
+      fputs("RNA warning (format error)\n", stdout);
+    }
+    else {
+      fputs(buf, stdout);
+    }
+  }
+#endif
 
   /* gcc macro adds '\n', but can't use for other compilers */
 #ifndef __GNUC__

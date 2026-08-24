@@ -22,7 +22,11 @@ namespace blender::nodes {
 struct FileOutputItemsAccessor : public socket_items::SocketItemsAccessorDefaults {
   using ItemT = NodeCompositorFileOutputItem;
   static StructRNA *item_srna;
+#if defined(WITH_APPLE_CROSSPLATFORM)
+  inline static const StringRefNull node_idname = "CompositorNodeOutputFile";
+#else
   static constexpr StringRefNull node_idname = "CompositorNodeOutputFile";
+#endif
   static constexpr bool has_type = true;
   static constexpr bool has_name = true;
   static constexpr bool has_name_validation = true;
@@ -30,16 +34,31 @@ struct FileOutputItemsAccessor : public socket_items::SocketItemsAccessorDefault
   static constexpr bool can_have_empty_name = true;
   static constexpr char unique_name_separator = '_';
   struct operator_idnames {
+#if defined(WITH_APPLE_CROSSPLATFORM)
+    inline static const StringRefNull add_item = "NODE_OT_file_output_item_add";
+    inline static const StringRefNull remove_item = "NODE_OT_file_output_item_remove";
+    inline static const StringRefNull move_item = "NODE_OT_file_output_item_move";
+#else
     static constexpr StringRefNull add_item = "NODE_OT_file_output_item_add";
     static constexpr StringRefNull remove_item = "NODE_OT_file_output_item_remove";
     static constexpr StringRefNull move_item = "NODE_OT_file_output_item_move";
+#endif
   };
   struct ui_idnames {
+#if defined(WITH_APPLE_CROSSPLATFORM)
+    inline static const StringRefNull list = "DATA_UL_file_output_items";
+#else
     static constexpr StringRefNull list = "DATA_UL_file_output_items";
+#endif
   };
   struct rna_names {
+#if defined(WITH_APPLE_CROSSPLATFORM)
+    inline static const StringRefNull items = "file_output_items";
+    inline static const StringRefNull active_index = "active_item_index";
+#else
     static constexpr StringRefNull items = "file_output_items";
     static constexpr StringRefNull active_index = "active_item_index";
+#endif
   };
 
   static socket_items::SocketItemsRef<NodeCompositorFileOutputItem> get_items_from_node(

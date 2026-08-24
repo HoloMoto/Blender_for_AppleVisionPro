@@ -30,13 +30,9 @@ class GHOST_WindowIOS;
 - (nonnull instancetype)initWithMetalKitView:(nonnull MTKView *)mtkView;
 
 @end
-
-UIWindowScene *GHOST_IOS_GetActiveWindowScene();
 #endif
 
 GHOST_TKey convertKey(int rawCode, uint16_t recvChar, uint16_t /*keyAction*/);
-/** Map USB HID keyboard usage (UIKey.keyCode) plus optional character to a GHOST key. */
-GHOST_TKey convertKeyFromHIDUsage(int hid_usage, uint16_t recv_char);
 
 class GHOST_SystemIOS : public GHOST_System {
  public:
@@ -250,26 +246,6 @@ class GHOST_SystemIOS : public GHOST_System {
   GHOST_TSuccess startSecurityScopedFileAccess(const char *filepath);
   GHOST_TSuccess stopSecurityScopedFileAccess(const char *filepath);
 
-  typedef void (*IOSFilePickerCallback)(const char *path, bool cancelled, void *user_data);
-
-  bool presentOpenDocumentPicker(IOSFilePickerCallback callback, void *user_data);
-  bool presentExportDocumentPicker(const char *local_blend_path,
-                                   IOSFilePickerCallback callback,
-                                   void *user_data);
-  bool commitExportFile(const char *staged_path,
-                        const char *destination_path,
-                        const char *filename,
-                        char *r_final_path,
-                        size_t final_path_max);
-  bool saveStagedExportToDocuments(const char *staged_path,
-                                   const char *filename,
-                                   char *r_final_path,
-                                   size_t final_path_max);
-  bool documentsExportFilepath(const char *filename,
-                               char *r_final_path,
-                               size_t final_path_max);
-  void showNativeAlert(const char *title, const char *message);
-
   /**
    * Handles a window event. Called by GHOST_WindowIOS window delegate
    * \param eventType: The type of window event.
@@ -295,21 +271,6 @@ class GHOST_SystemIOS : public GHOST_System {
    * External objects should call this when they send an event outside processEvents.
    */
   void notifyExternalEventProcessed();
-
-  /**
-   * Bluetooth / Magic Keyboard and hardware pointer devices (routed from #GHOST_IOSViewController).
-   * Safe to call from the main thread after the window exists.
-   */
-  void pushHardwareKeyEvent(GHOST_IWindow *window,
-                            GHOST_TEventType type,
-                            GHOST_TKey key,
-                            bool is_repeat,
-                            const char utf8_buf[6] = nullptr);
-  void pushHardwareModifierFlags(GHOST_IWindow *window, uint32_t modifier_flags);
-  void pushHardwareCursorMove(GHOST_IWindow *window, int32_t x, int32_t y);
-  void pushHardwareButtonEvent(GHOST_IWindow *window,
-                               GHOST_TEventType type,
-                               GHOST_TButton mask);
 
   /**
    * \see GHOST_ISystem
@@ -378,6 +339,8 @@ class GHOST_SystemIOS : public GHOST_System {
   /** Raised window is not yet known by the window manager,
    * so delay application become active event handling */
   bool need_delayed_application_become_active_event_processing_;
+  bool input_reactivation_pending_;
+  int input_reactivation_frames_left_;
 
   /** State of the modifiers. */
   uint32_t modifier_mask_;
@@ -392,8 +355,4 @@ class GHOST_SystemIOS : public GHOST_System {
   /** To prevent multiple warp, we store the time of the last warp event
    * and ignore mouse moved events generated before that. */
   double last_warp_timestamp_;
-
-  /** Re-apply first-responder / key-window state after foreground transitions. */
-  bool input_reactivation_pending_ = false;
-  int input_reactivation_frames_left_ = 0;
 };

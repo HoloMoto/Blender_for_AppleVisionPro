@@ -31,20 +31,20 @@ struct BakeItemsAccessor : public socket_items::SocketItemsAccessorDefaults {
   using ItemT = NodeGeometryBakeItem;
   static StructRNA *item_srna;
   static int node_type;
-  static constexpr StringRefNull node_idname = "GeometryNodeBake";
+  inline static const StringRefNull node_idname = "GeometryNodeBake";
   static constexpr bool has_type = true;
   static constexpr bool has_name = true;
   struct operator_idnames {
-    static constexpr StringRefNull add_item = "NODE_OT_bake_node_item_add";
-    static constexpr StringRefNull remove_item = "NODE_OT_bake_node_item_remove";
-    static constexpr StringRefNull move_item = "NODE_OT_bake_node_item_move";
+    inline static const StringRefNull add_item = "NODE_OT_bake_node_item_add";
+    inline static const StringRefNull remove_item = "NODE_OT_bake_node_item_remove";
+    inline static const StringRefNull move_item = "NODE_OT_bake_node_item_move";
   };
   struct ui_idnames {
-    static constexpr StringRefNull list = "DATA_UL_bake_node_items";
+    inline static const StringRefNull list = "DATA_UL_bake_node_items";
   };
   struct rna_names {
-    static constexpr StringRefNull items = "bake_items";
-    static constexpr StringRefNull active_index = "active_index";
+    inline static const StringRefNull items = "bake_items";
+    inline static const StringRefNull active_index = "active_index";
   };
 
   static socket_items::SocketItemsRef<NodeGeometryBakeItem> get_items_from_node(bNode &node)

@@ -50,22 +50,22 @@ struct CombineBundleItemsAccessor : public socket_items::SocketItemsAccessorDefa
   using ItemT = NodeCombineBundleItem;
   static StructRNA *item_srna;
   static int node_type;
-  static constexpr StringRefNull node_idname = "NodeCombineBundle";
+  inline static const StringRefNull node_idname = "NodeCombineBundle";
   static constexpr bool has_type = true;
   static constexpr bool has_name = true;
   static constexpr bool has_name_validation = true;
   static constexpr char unique_name_separator = '_';
   struct operator_idnames {
-    static constexpr StringRefNull add_item = "NODE_OT_combine_bundle_item_add";
-    static constexpr StringRefNull remove_item = "NODE_OT_combine_bundle_item_remove";
-    static constexpr StringRefNull move_item = "NODE_OT_combine_bundle_item_move";
+    inline static const StringRefNull add_item = "NODE_OT_combine_bundle_item_add";
+    inline static const StringRefNull remove_item = "NODE_OT_combine_bundle_item_remove";
+    inline static const StringRefNull move_item = "NODE_OT_combine_bundle_item_move";
   };
   struct ui_idnames {
-    static constexpr StringRefNull list = "DATA_UL_combine_bundle_items";
+    inline static const StringRefNull list = "DATA_UL_combine_bundle_items";
   };
   struct rna_names {
-    static constexpr StringRefNull items = "bundle_items";
-    static constexpr StringRefNull active_index = "active_index";
+    inline static const StringRefNull items = "bundle_items";
+    inline static const StringRefNull active_index = "active_index";
   };
 
   static socket_items::SocketItemsRef<ItemT> get_items_from_node(bNode &node)
@@ -126,22 +126,22 @@ struct SeparateBundleItemsAccessor : public socket_items::SocketItemsAccessorDef
   using ItemT = NodeSeparateBundleItem;
   static StructRNA *item_srna;
   static int node_type;
-  static constexpr StringRefNull node_idname = "NodeSeparateBundle";
+  inline static const StringRefNull node_idname = "NodeSeparateBundle";
   static constexpr bool has_type = true;
   static constexpr bool has_name = true;
   static constexpr bool has_name_validation = true;
   static constexpr char unique_name_separator = '_';
   struct operator_idnames {
-    static constexpr StringRefNull add_item = "NODE_OT_separate_bundle_item_add";
-    static constexpr StringRefNull remove_item = "NODE_OT_separate_bundle_item_remove";
-    static constexpr StringRefNull move_item = "NODE_OT_separate_bundle_item_move";
+    inline static const StringRefNull add_item = "NODE_OT_separate_bundle_item_add";
+    inline static const StringRefNull remove_item = "NODE_OT_separate_bundle_item_remove";
+    inline static const StringRefNull move_item = "NODE_OT_separate_bundle_item_move";
   };
   struct ui_idnames {
-    static constexpr StringRefNull list = "DATA_UL_separate_bundle_items";
+    inline static const StringRefNull list = "DATA_UL_separate_bundle_items";
   };
   struct rna_names {
-    static constexpr StringRefNull items = "bundle_items";
-    static constexpr StringRefNull active_index = "active_index";
+    inline static const StringRefNull items = "bundle_items";
+    inline static const StringRefNull active_index = "active_index";
   };
 
   static socket_items::SocketItemsRef<ItemT> get_items_from_node(bNode &node)

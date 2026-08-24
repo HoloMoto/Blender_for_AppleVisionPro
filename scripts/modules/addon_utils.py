@@ -18,7 +18,30 @@ __all__ = (
 )
 
 import bpy as _bpy
-_preferences = _bpy.context.preferences
+
+
+class _FallbackExtensions:
+    repos = ()
+
+
+class _FallbackPreferences:
+    addons = ()
+    extensions = _FallbackExtensions()
+
+
+_fb = _FallbackPreferences()
+
+
+class _LazyContextPreferences:
+    """Delegate to ``bpy.context.preferences`` when it exists (may be after import)."""
+
+    def __getattr__(self, name):
+        p = getattr(_bpy.context, "preferences", None)
+        target = p if p is not None else _fb
+        return getattr(target, name)
+
+
+_preferences = _LazyContextPreferences()
 
 error_encoding = False
 # (name, file, path)

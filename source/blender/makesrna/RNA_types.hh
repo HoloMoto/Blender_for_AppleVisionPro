@@ -76,9 +76,27 @@ struct PointerRNA {
   blender::Vector<AncestorPointerRNA, ANCESTOR_POINTERRNA_DEFAULT_SIZE> ancestors = {};
 
   PointerRNA() = default;
+#ifdef WITH_APPLE_CROSSPLATFORM
+  PointerRNA(const PointerRNA &other)
+      : owner_id(other.owner_id), type(other.type), data(other.data), ancestors{}
+  {
+  }
+#else
   PointerRNA(const PointerRNA &) = default;
+#endif
   PointerRNA(PointerRNA &&) = default;
+#ifdef WITH_APPLE_CROSSPLATFORM
+  PointerRNA &operator=(const PointerRNA &other)
+  {
+    owner_id = other.owner_id;
+    type = other.type;
+    data = other.data;
+    ancestors.clear();
+    return *this;
+  }
+#else
   PointerRNA &operator=(const PointerRNA &other) = default;
+#endif
   PointerRNA &operator=(PointerRNA &&other) = default;
 
   PointerRNA(ID *owner_id, StructRNA *type, void *data)
@@ -91,8 +109,21 @@ struct PointerRNA {
     this->ancestors.append({parent.type, parent.data});
   }
   PointerRNA(ID *owner_id, StructRNA *type, void *data, blender::Span<AncestorPointerRNA> parents)
-      : owner_id(owner_id), type(type), data(data), ancestors(parents)
+      : owner_id(owner_id), type(type), data(data), ancestors{}
   {
+#ifdef WITH_APPLE_CROSSPLATFORM
+    /* iOS startup has shown rare corrupted parent spans coming from invalid RNA call marshalling.
+     * Skip ancestor propagation when the span metadata looks clearly invalid. */
+    const AncestorPointerRNA *parents_data = parents.data();
+    const int64_t parents_size = parents.size();
+    if (parents_data != nullptr && uintptr_t(parents_data) >= 4096 && parents_size >= 0 &&
+        parents_size <= 1024)
+    {
+      ancestors.extend(parents);
+    }
+#else
+    ancestors.extend(parents);
+#endif
   }
 
   /** Reset the pointer to its initial empty state, such that it equals to PointerRNA_NULL. */

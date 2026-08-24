@@ -18,20 +18,20 @@ struct SimulationItemsAccessor : public socket_items::SocketItemsAccessorDefault
   using ItemT = NodeSimulationItem;
   static StructRNA *item_srna;
   static int node_type;
-  static constexpr StringRefNull node_idname = "GeometryNodeSimulationOutput";
+  inline static const StringRefNull node_idname = "GeometryNodeSimulationOutput";
   static constexpr bool has_type = true;
   static constexpr bool has_name = true;
   struct operator_idnames {
-    static constexpr StringRefNull add_item = "NODE_OT_simulation_zone_item_add";
-    static constexpr StringRefNull remove_item = "NODE_OT_simulation_zone_item_remove";
-    static constexpr StringRefNull move_item = "NODE_OT_simulation_zone_item_move";
+    inline static const StringRefNull add_item = "NODE_OT_simulation_zone_item_add";
+    inline static const StringRefNull remove_item = "NODE_OT_simulation_zone_item_remove";
+    inline static const StringRefNull move_item = "NODE_OT_simulation_zone_item_move";
   };
   struct ui_idnames {
-    static constexpr StringRefNull list = "DATA_UL_simulation_zone_state";
+    inline static const StringRefNull list = "DATA_UL_simulation_zone_state";
   };
   struct rna_names {
-    static constexpr StringRefNull items = "state_items";
-    static constexpr StringRefNull active_index = "active_index";
+    inline static const StringRefNull items = "state_items";
+    inline static const StringRefNull active_index = "active_index";
   };
 
   static socket_items::SocketItemsRef<NodeSimulationItem> get_items_from_node(bNode &node)

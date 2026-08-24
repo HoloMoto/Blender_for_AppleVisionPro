@@ -18,7 +18,7 @@ struct IndexSwitchItemsAccessor : public socket_items::SocketItemsAccessorDefaul
   using ItemT = IndexSwitchItem;
   static StructRNA *item_srna;
   static int node_type;
-  static constexpr StringRefNull node_idname = "GeometryNodeIndexSwitch";
+  inline static const StringRefNull node_idname = "GeometryNodeIndexSwitch";
   static constexpr bool has_type = false;
   static constexpr bool has_name = false;
 

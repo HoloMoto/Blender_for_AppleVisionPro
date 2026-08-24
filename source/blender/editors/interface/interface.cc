@@ -4751,7 +4751,10 @@ void ui_but_rna_menu_convert_to_panel_type(uiBut *but, const char *panel_type)
   //  BLI_assert(but->menu_create_func == ui_def_but_rna__menu);
   //  BLI_assert((void *)but->poin == but);
   but->menu_create_func = ui_def_but_rna__panel_type;
-  but->func_argN = BLI_strdup(panel_type);
+  const char *safe_panel_type = (panel_type != nullptr && uintptr_t(panel_type) >= 4096) ?
+                                    panel_type :
+                                    "";
+  but->func_argN = BLI_strdup(safe_panel_type);
   but->func_argN_free_fn = MEM_freeN;
   but->func_argN_copy_fn = MEM_dupallocN;
 }
@@ -4788,7 +4791,9 @@ void ui_but_rna_menu_convert_to_menu_type(uiBut *but, const char *menu_type)
   }
   but->func_argN_free_fn = MEM_freeN;
   but->func_argN_copy_fn = MEM_dupallocN;
-  but->func_argN = BLI_strdup(menu_type);
+  const char *safe_menu_type = (menu_type != nullptr && uintptr_t(menu_type) >= 4096) ? menu_type :
+                                                                                          "";
+  but->func_argN = BLI_strdup(safe_menu_type);
 }
 
 static void ui_but_submenu_enable(uiBlock *block, uiBut *but)
