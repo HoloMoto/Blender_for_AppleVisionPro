@@ -287,6 +287,10 @@ done
 if [ -d "$USD_FW" ] && [ -n "$USD_SRC" ]; then
   mkdir -p "$USD_FW/usd"
   /bin/cp -R "$USD_SRC/." "$USD_FW/usd/"
+  # App Store treats .py inside frameworks as unsigned code (ITMS-90035).
+  # TF-97 packaging had templates without Python; strip any that appear.
+  find "$USD_FW" -name '*.py' -type f -delete 2>/dev/null || true
+  find "$ASSETS" -path '*/usd/*/resources/codegenTemplates/*.py' -type f -delete 2>/dev/null || true
   echo "ios_appstore_frameworks: staged USD plugInfo -> libusd_ms.framework/usd"
 fi
 # Remove any leftover illegal Frameworks/plugin from older packaging.
