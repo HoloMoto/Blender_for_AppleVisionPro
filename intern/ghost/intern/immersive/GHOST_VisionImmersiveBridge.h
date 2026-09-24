@@ -20,6 +20,24 @@ bool GHOST_Vision_immersive_space_is_supported(void);
 /** Set the USDZ path that the Immersive Space RealityView should load. */
 void GHOST_Vision_set_immersive_model_path(const char *usdz_path);
 
+/**
+ * Live Mesh Bridge (5.0.1): push depsgraph-evaluated meshes without USD.
+ * Call begin → push (0..N) → commit. Verts are Blender-space relative to
+ * object world location (translation synced separately). Indices are uint32
+ * triangle corners (3 per tri).
+ */
+void GHOST_Vision_live_mesh_begin(void);
+void GHOST_Vision_live_mesh_push(const char *name,
+                                 int vert_count,
+                                 const float *verts_blender,
+                                 int tri_count,
+                                 const unsigned int *indices,
+                                 float r,
+                                 float g,
+                                 float b,
+                                 float a);
+void GHOST_Vision_live_mesh_commit(void);
+
 /** Request opening the Immersive Space. Returns false if unavailable. */
 bool GHOST_Vision_open_immersive_space(void);
 
@@ -94,6 +112,11 @@ void GHOST_Vision_set_object_extract_active(bool enable);
 
 /** Toggle spatial shader-node overlay visibility. */
 void GHOST_Vision_set_shader_space_enabled(bool enable);
+
+/** iPad marker alignment controlled from Blender's existing Immersive N-panel. */
+void GHOST_Vision_spectator_align_action(int action);
+int GHOST_Vision_spectator_align_state(void);
+void GHOST_Vision_spectator_align_status(char *dst, int dst_size);
 
 /** Multi Vision Pro Immersive share (Multipeer). No-op when inactive. */
 bool GHOST_Vision_multiuser_host(const char *display_name);

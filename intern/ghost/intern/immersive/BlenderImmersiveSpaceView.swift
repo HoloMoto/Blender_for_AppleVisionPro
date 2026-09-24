@@ -50,6 +50,13 @@ import simd
       startSampling()
     }
 
+    /** World-space head position for palm-facing checks (nil if untracked). */
+    var headWorldPosition: SIMD3<Float>? {
+      guard let head = headAnchor, head.isAnchored else { return nil }
+      let m = head.transformMatrix(relativeTo: nil)
+      return SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
+    }
+
     func detach() {
       sampleTask?.cancel()
       sampleTask = nil
@@ -465,6 +472,10 @@ import simd
     @State private var handMenuAnchor: Entity = AnchorEntity(
       .hand(.left, location: .palm), trackingMode: .continuous)
     @State private var handMenuConfigured = false
+    /** True while left palm faces the wearer (hide menu on 手の甲 to avoid mis-taps). */
+    @State private var handMenuPalmFacing = false
+    @State private var handMenuEntityRef: Entity?
+    @State private var handMenuPalmTask: Task<Void, Never>?
     @StateObject private var objectSync = BlenderImmersiveObjectSync()
     @StateObject private var boneOverlay = BlenderImmersiveBoneOverlay()
     @StateObject private var shaderOverlay = BlenderImmersiveShaderOverlay()
@@ -505,6 +516,48 @@ import simd
       /* Keep near 1.0 for pinch hit targets. */
       menuEntity.scale = SIMD3(repeating: 0.95)
       handMenuConfigured = true
+      handMenuEntityRef = menuEntity
+      applyHandMenuPalmVisibility(to: menuEntity)
+    }
+
+    /**
+     * Show Hand Menu only when the wearer looks at the palm (手のひら), not 手の甲.
+     * Device observation (TF-131/132): RealityKit left-palm AnchorEntity local +Y
+     * points toward the dorsum, so we use −Y as the palm-facing normal.
+     */
+    private func updateHandMenuPalmFacing() {
+      guard handMenuAnchor.isAnchored, let headPos = viewerPose.headWorldPosition else {
+        handMenuPalmFacing = false
+        return
+      }
+      let m = handMenuAnchor.transformMatrix(relativeTo: nil)
+      /* −Y = out of palm toward wearer when palm faces the user (see TF-132 report). */
+      let palmNormal = simd_normalize(
+        SIMD3(-m.columns.1.x, -m.columns.1.y, -m.columns.1.z))
+      let palmPos = SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
+      let toHead = headPos - palmPos
+      let dist = simd_length(toHead)
+      guard dist > 1.0e-4 else {
+        handMenuPalmFacing = false
+        return
+      }
+      let facing = simd_dot(palmNormal, toHead / dist)
+      /* Hysteresis: avoid flicker at grazing angles. */
+      if handMenuPalmFacing {
+        if facing < 0.15 {
+          handMenuPalmFacing = false
+        }
+      }
+      else if facing > 0.40 {
+        handMenuPalmFacing = true
+      }
+    }
+
+    private func applyHandMenuPalmVisibility(to menuEntity: Entity) {
+      updateHandMenuPalmFacing()
+      let show = handMenuPalmFacing
+      menuEntity.isEnabled = show
+      menuEntity.components.set(OpacityComponent(opacity: show ? 1.0 : 0.0))
     }
 
     public var body: some View {
@@ -536,6 +589,9 @@ import simd
           remotePresenceRoot.name = "BlenderRemotePresence"
           worldRoot.addChild(remotePresenceRoot)
           content.add(handMenuAnchor)
+          /* Marker detect viz on container (not worldRoot) — survives SharedAnchor reparent. */
+          BlenderImmersiveSpectatorAlignController.shared.attachVisualization(to: container)
+          BlenderImmersiveMRCController.shared.bindReferenceEntity(worldRoot)
           sharedAnchor.attach(sceneContainer: container, worldRoot: worldRoot)
           BlenderImmersiveMultiuserSession.shared.onRemoteSharedAnchor = { id, shared in
             Task { @MainActor in
@@ -577,6 +633,9 @@ import simd
            * left the panel 90° off / covering the hand. */
           if !handMenuConfigured, let menuEntity = attachments.entity(for: "handMenu") {
             configureHandMenuEntity(menuEntity)
+          }
+          else if let menuEntity = attachments.entity(for: "handMenu") {
+            applyHandMenuPalmVisibility(to: menuEntity)
           }
       } attachments: {
         Attachment(id: "handMenu") {
@@ -635,6 +694,25 @@ import simd
           Task { @MainActor in
             await requestLoadModel(worldRoot: worldRoot)
           }
+        }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveLiveMeshesChanged)) {
+        _ in
+        guard let worldRoot = objectSync.sharedWorldRoot else { return }
+        let payloads = BlenderImmersiveState.shared.liveMeshes
+        Task { @MainActor in
+          if payloads.isEmpty {
+            BlenderImmersiveLiveMeshBuilder.clear(from: worldRoot)
+            return
+          }
+          let liveRoot = await BlenderImmersiveLiveMeshBuilder.apply(
+            payloads: payloads, to: worldRoot)
+          objectSync.configure(
+            worldRoot: worldRoot,
+            sceneRoot: liveRoot,
+            placementOffset: placementOffset,
+            generateCollisions: true)
+          BlenderImmersiveBloom.apply(worldRoot: worldRoot, sceneRoot: liveRoot)
         }
       }
       .onReceive(
@@ -745,14 +823,27 @@ import simd
         originX = BlenderImmersiveState.shared.placementX
         originHeight = BlenderImmersiveState.shared.placementY
         originDepth = BlenderImmersiveState.shared.placementZ
+        handMenuPalmTask?.cancel()
+        handMenuPalmTask = Task { @MainActor in
+          while !Task.isCancelled {
+            if let menu = handMenuEntityRef {
+              applyHandMenuPalmVisibility(to: menu)
+            }
+            try? await Task.sleep(nanoseconds: 33_000_000)
+          }
+        }
       }
       .onDisappear {
+        handMenuPalmTask?.cancel()
+        handMenuPalmTask = nil
         musePen.detach()
         handPen.detach()
         visionPlatform.detach()
         worldMesh.stop()
         viewerPose.detach()
         sharedAnchor.stop()
+        BlenderImmersiveSpectatorAlignController.shared.detachVisualization()
+        BlenderImmersiveMRCController.shared.stopServer()
         if BlenderImmersiveState.shared.sharedAnchor === sharedAnchor {
           BlenderImmersiveState.shared.sharedAnchor = nil
         }
@@ -884,6 +975,11 @@ import simd
       /* USD exports Blender units as meters. Keep the authored scale exactly:
        * the default 2x2x2 cube must appear as a 2-meter cube in visionOS.
        * Placement lives on worldRoot — leave the USD file root at identity. */
+
+      /* USD path replaces Live Mesh Bridge entities for this load. */
+      for child in worldRoot.children where child.name == "BlenderImmersiveLive" {
+        child.removeFromParent()
+      }
 
       let oldUSD = worldRoot.children.filter { $0.name == "BlenderImmersiveUSD" }
       worldRoot.addChild(newEntity)

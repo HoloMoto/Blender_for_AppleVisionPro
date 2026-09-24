@@ -54,6 +54,9 @@
                      activeBone:(NSString *)activeBone;
 + (void)setUseHandAsPen:(BOOL)enable;
 + (void)setShaderSpaceEnabled:(BOOL)enable;
++ (void)spectatorAlignAction:(int)action;
++ (NSString *)spectatorAlignStatus;
++ (int)spectatorAlignState;
 + (BOOL)multiuserHost:(NSString *)displayName;
 + (BOOL)multiuserJoin:(NSString *)displayName;
 + (void)multiuserLeave;
@@ -61,6 +64,15 @@
 + (BOOL)multiuserIsHost;
 + (NSString *)multiuserStatus;
 + (void)multiuserBroadcastUSD:(NSString *)path;
++ (void)liveMeshBegin;
++ (void)liveMeshPushName:(NSString *)name
+                   verts:(NSData *)verts
+                 indices:(NSData *)indices
+                       r:(float)r
+                       g:(float)g
+                       b:(float)b
+                       a:(float)a;
++ (void)liveMeshCommit;
 @end
 
 bool GHOST_Vision_immersive_space_is_supported(void)
@@ -73,6 +85,45 @@ void GHOST_Vision_set_immersive_model_path(const char *usdz_path)
   @autoreleasepool {
     NSString *path = (usdz_path != nullptr) ? [NSString stringWithUTF8String:usdz_path] : nil;
     [BlenderImmersiveBridge setModelPath:path];
+  }
+}
+
+void GHOST_Vision_live_mesh_begin(void)
+{
+  @autoreleasepool {
+    [BlenderImmersiveBridge liveMeshBegin];
+  }
+}
+
+void GHOST_Vision_live_mesh_push(const char *name,
+                                 const int vert_count,
+                                 const float *verts_blender,
+                                 const int tri_count,
+                                 const unsigned int *indices,
+                                 const float r,
+                                 const float g,
+                                 const float b,
+                                 const float a)
+{
+  if (name == nullptr || verts_blender == nullptr || indices == nullptr || vert_count <= 0 ||
+      tri_count <= 0)
+  {
+    return;
+  }
+  @autoreleasepool {
+    NSString *n = [NSString stringWithUTF8String:name];
+    NSData *verts = [NSData dataWithBytes:verts_blender
+                                   length:(NSUInteger)vert_count * 3 * sizeof(float)];
+    NSData *idxs = [NSData dataWithBytes:indices
+                                  length:(NSUInteger)tri_count * 3 * sizeof(unsigned int)];
+    [BlenderImmersiveBridge liveMeshPushName:n verts:verts indices:idxs r:r g:g b:b a:a];
+  }
+}
+
+void GHOST_Vision_live_mesh_commit(void)
+{
+  @autoreleasepool {
+    [BlenderImmersiveBridge liveMeshCommit];
   }
 }
 
@@ -297,6 +348,34 @@ void GHOST_Vision_set_shader_space_enabled(const bool enable)
   }
 }
 
+void GHOST_Vision_spectator_align_action(const int action)
+{
+  @autoreleasepool {
+    [BlenderImmersiveBridge spectatorAlignAction:action];
+  }
+}
+
+int GHOST_Vision_spectator_align_state(void)
+{
+  @autoreleasepool {
+    return [BlenderImmersiveBridge spectatorAlignState];
+  }
+}
+
+void GHOST_Vision_spectator_align_status(char *dst, const int dst_size)
+{
+  if (dst == nullptr || dst_size <= 0) {
+    return;
+  }
+  dst[0] = '\0';
+  @autoreleasepool {
+    NSString *status = [BlenderImmersiveBridge spectatorAlignStatus];
+    if (status != nil) {
+      [status getCString:dst maxLength:(NSUInteger)dst_size encoding:NSUTF8StringEncoding];
+    }
+  }
+}
+
 bool GHOST_Vision_multiuser_host(const char *display_name)
 {
   __block bool ok = false;
@@ -378,6 +457,20 @@ bool GHOST_Vision_immersive_space_is_supported(void)
 
 void GHOST_Vision_set_immersive_model_path(const char * /*usdz_path*/) {}
 
+void GHOST_Vision_live_mesh_begin(void) {}
+void GHOST_Vision_live_mesh_push(const char * /*name*/,
+                                 const int /*vert_count*/,
+                                 const float * /*verts_blender*/,
+                                 const int /*tri_count*/,
+                                 const unsigned int * /*indices*/,
+                                 const float /*r*/,
+                                 const float /*g*/,
+                                 const float /*b*/,
+                                 const float /*a*/)
+{
+}
+void GHOST_Vision_live_mesh_commit(void) {}
+
 bool GHOST_Vision_open_immersive_space(void)
 {
   return false;
@@ -454,6 +547,20 @@ void GHOST_Vision_set_object_extract_active(const bool /*enable*/) {}
 
 void GHOST_Vision_set_shader_space_enabled(const bool /*enable*/) {}
 
+void GHOST_Vision_spectator_align_action(const int /*action*/) {}
+
+int GHOST_Vision_spectator_align_state(void)
+{
+  return 0;
+}
+
+void GHOST_Vision_spectator_align_status(char *dst, const int dst_size)
+{
+  if (dst != nullptr && dst_size > 0) {
+    dst[0] = '\0';
+  }
+}
+
 bool GHOST_Vision_multiuser_host(const char * /*display_name*/)
 {
   return false;
@@ -485,4 +592,11 @@ void GHOST_Vision_multiuser_status(char *dst, const int dst_size)
 
 void GHOST_Vision_multiuser_broadcast_usd(const char * /*usdz_path*/) {}
 
+#endif
+
+#if defined(WITH_VISIONOS_IMMERSIVE_SPACE)
+extern "C" {
+#include "mrc_hidden/SwiftSocketC/ytcpsocket.c"
+#include "mrc_hidden/SwiftSocketC/yudpsocket.c"
+}
 #endif

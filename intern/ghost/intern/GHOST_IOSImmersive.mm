@@ -120,6 +120,39 @@ extern "C" void GHOST_IOS_immersive_reload_model(const char *usdz_path)
   GHOST_Vision_set_immersive_model_path(usdz_path);
 }
 
+extern "C" void GHOST_IOS_immersive_live_mesh_begin(void)
+{
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return;
+  }
+  GHOST_Vision_live_mesh_begin();
+}
+
+extern "C" void GHOST_IOS_immersive_live_mesh_push(const char *name,
+                                                     const int vert_count,
+                                                     const float *verts_blender,
+                                                     const int tri_count,
+                                                     const unsigned int *indices,
+                                                     const float r,
+                                                     const float g,
+                                                     const float b,
+                                                     const float a)
+{
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return;
+  }
+  GHOST_Vision_live_mesh_push(
+      name, vert_count, verts_blender, tri_count, indices, r, g, b, a);
+}
+
+extern "C" void GHOST_IOS_immersive_live_mesh_commit(void)
+{
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return;
+  }
+  GHOST_Vision_live_mesh_commit();
+}
+
 extern "C" void GHOST_IOS_immersive_update_active_object(const char *object_name,
                                                           const float blender_x,
                                                           const float blender_y,
@@ -276,6 +309,21 @@ extern "C" void GHOST_IOS_push_tablet_button(const bool is_down, const float pre
                                   is_down ? GHOST_kEventButtonDown : GHOST_kEventButtonUp,
                                   GHOST_kButtonMaskLeft,
                                   ghost_ios_tablet_from_pressure(pressure));
+}
+
+extern "C" void GHOST_IOS_spectator_align_action(const int action)
+{
+  GHOST_Vision_spectator_align_action(action);
+}
+
+extern "C" int GHOST_IOS_spectator_align_state(void)
+{
+  return GHOST_Vision_spectator_align_state();
+}
+
+extern "C" void GHOST_IOS_spectator_align_status(char *dst, const int dst_size)
+{
+  GHOST_Vision_spectator_align_status(dst, dst_size);
 }
 
 extern "C" bool GHOST_IOS_multiuser_host(const char *display_name)

@@ -4291,6 +4291,12 @@ static bool g_wm_ios_muse_tip_just_released = false;
 /** Set when Muse actually changed mesh geometry — drives Immersive USD refresh. */
 static bool g_wm_ios_muse_geometry_dirty = false;
 /**
+ * Set when the timeline frame advances (playback or scrub). Drives Live Mesh
+ * re-push without requiring Edit/Sculpt mode. USD full re-export is skipped for
+ * this path — animation needs evaluated-mesh updates, not a USD rewrite storm.
+ */
+static bool g_wm_ios_anim_frame_dirty = false;
+/**
  * Immersive USDZ re-export pacing (seconds). Tunable from Immersive sidebar.
  * Shorter = snappier spatial scene, heavier; longer = lighter on CPU/GPU.
  */
@@ -4301,6 +4307,8 @@ static float g_wm_ios_usd_refresh_interval = 0.35f;
  * Off by default — avoids fighting live active-object transform sync.
  */
 static bool g_wm_ios_sync_transforms_to_space = false;
+
+static bool wm_ios_immersive_object_visible_for_space(const Base *base, const Object *ob);
 
 /**
  * Called by BlenderImmersiveSpaceView.swift while dragging an entity. Queue the
@@ -6964,6 +6972,7 @@ static void wm_ios_immersive_apply_hand_menu(bContext *C)
       BKE_scene_frame_set(scene, float(anim_set_frame));
       DEG_id_tag_update(&scene->id, ID_RECALC_FRAME_CHANGE);
       WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
+      g_wm_ios_anim_frame_dirty = true;
       char buf[64];
       SNPRINTF(buf, "anim: set frame=%d", scene->r.cfra);
       GHOST_IOS_diag_log(buf);
@@ -6973,6 +6982,7 @@ static void wm_ios_immersive_apply_hand_menu(bContext *C)
       BKE_scene_frame_set(scene, float(next));
       DEG_id_tag_update(&scene->id, ID_RECALC_FRAME_CHANGE);
       WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
+      g_wm_ios_anim_frame_dirty = true;
       char buf[64];
       SNPRINTF(buf, "anim: frame=%d", scene->r.cfra);
       GHOST_IOS_diag_log(buf);
@@ -8466,7 +8476,7 @@ static void wm_ios_immersive_muse_object_grab(bContext *C,
       if (base == nullptr || base->object == nullptr) {
         continue;
       }
-      if ((base->flag & BASE_ENABLED_AND_MAYBE_VISIBLE_IN_VIEWPORT) == 0) {
+      if (!wm_ios_immersive_object_visible_for_space(base, base->object)) {
         continue;
       }
       Object *cand = base->object;
@@ -8998,6 +9008,36 @@ static void wm_ios_immersive_consume_muse(bContext *C, Object *ob)
 }
 
 /**
+ * Immersive Space must match the artist's viewport / render intent:
+ * skip objects hidden in the viewport (incl. H-key / outliner eye) and
+ * objects (or collections) disabled for render.
+ *
+ * USD ``visible_objects_only`` + ``DAG_EVAL_VIEWPORT`` alone still exports
+ * ``hide_render`` objects, which RealityKit then shows in Immersive.
+ */
+static bool wm_ios_immersive_object_visible_for_space(const Base *base, const Object *ob)
+{
+  if (base == nullptr || ob == nullptr) {
+    return false;
+  }
+  if (ob->visibility_flag & (OB_HIDE_VIEWPORT | OB_HIDE_RENDER)) {
+    return false;
+  }
+  if (base->flag & BASE_HIDDEN) {
+    return false;
+  }
+  /* Default 3D View / Outliner visibility (stricter than MAYBE_VISIBLE). */
+  if ((base->flag & BASE_ENABLED_AND_VISIBLE_IN_DEFAULT_VIEWPORT) == 0) {
+    return false;
+  }
+  /* Collection "Disable in Renders" clears BASE_ENABLED_RENDER. */
+  if ((base->flag & BASE_ENABLED_RENDER) == 0) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Shared default material for Immersive USD export when a mesh has no / null
  * slots. Prevents RealityKit from loading entities with empty materials.
  */
@@ -9054,7 +9094,7 @@ static void wm_ios_immersive_ensure_mesh_materials(bContext *C)
     if (ob == nullptr || ob->type != OB_MESH) {
       continue;
     }
-    if ((base_ptr->flag & BASE_ENABLED_AND_MAYBE_VISIBLE_IN_VIEWPORT) == 0) {
+    if (!wm_ios_immersive_object_visible_for_space(base_ptr, ob)) {
       continue;
     }
     if (ob->totcol == 0) {
@@ -9110,13 +9150,41 @@ static bool wm_ios_immersive_export_scene(bContext *C,
     BLI_delete(usdz_path, false, false);
   }
 
+  /* Restrict USD to objects that should appear in Immersive. ``visible_objects_only``
+   * still includes hide_render meshes under VIEWPORT eval; select the intended
+   * set and export with selected_objects_only so RealityKit never sees them. */
+  Scene *scene = CTX_data_scene(C);
+  ViewLayer *view_layer = CTX_data_view_layer(C);
+  struct SelRestore {
+    Base *base;
+    short flag;
+  };
+  std::vector<SelRestore> sel_restore;
+  if (scene != nullptr && view_layer != nullptr) {
+    BKE_view_layer_synced_ensure(scene, view_layer);
+    ListBase *bases = BKE_view_layer_object_bases_get(view_layer);
+    for (Base *base = static_cast<Base *>(bases->first); base != nullptr; base = base->next) {
+      sel_restore.push_back({base, base->flag});
+      if (wm_ios_immersive_object_visible_for_space(base, base->object)) {
+        base->flag |= BASE_SELECTED;
+      }
+      else {
+        base->flag &= ~BASE_SELECTED;
+      }
+    }
+  }
+
   PointerRNA props_ptr;
   WM_operator_properties_create_ptr(&props_ptr, ot);
   RNA_string_set(&props_ptr, "filepath", usdz_path);
   RNA_boolean_set(&props_ptr, "visible_objects_only", true);
-  RNA_boolean_set(&props_ptr, "selected_objects_only", false);
+  RNA_boolean_set(&props_ptr, "selected_objects_only", true);
   RNA_boolean_set(&props_ptr, "export_materials", true);
   RNA_boolean_set(&props_ptr, "export_meshes", true);
+  /* Lights: ComputeLocalBound on UsdLux can crash on visionOS/sim USD builds.
+   * Immersive Space needs meshes/materials; skip lights/cameras. */
+  RNA_boolean_set(&props_ptr, "export_lights", false);
+  RNA_boolean_set(&props_ptr, "export_cameras", false);
   RNA_boolean_set(&props_ptr, "generate_preview_surface", true);
   /* Preserve physical dimensions: USD is authored with one unit per meter. */
   RNA_float_set(&props_ptr, "meters_per_unit", 1.0f);
@@ -9132,6 +9200,12 @@ static bool wm_ios_immersive_export_scene(bContext *C,
   const wmOperatorStatus export_status = WM_operator_name_call_ptr(
       C, ot, blender::wm::OpCallContext::ExecDefault, &props_ptr, nullptr);
   WM_operator_properties_free(&props_ptr);
+
+  for (const SelRestore &entry : sel_restore) {
+    if (entry.base != nullptr) {
+      entry.base->flag = entry.flag;
+    }
+  }
 
   const bool ok = (export_status & OPERATOR_FINISHED) && BLI_exists(usdz_path);
   if (!ok && show_error) {
@@ -9175,7 +9249,7 @@ static uint64_t wm_ios_immersive_scene_mesh_fingerprint(bContext *C)
     if (ob == nullptr || ob->type != OB_MESH) {
       continue;
     }
-    if ((base->flag & BASE_ENABLED_AND_MAYBE_VISIBLE_IN_VIEWPORT) == 0) {
+    if (!wm_ios_immersive_object_visible_for_space(base, ob)) {
       continue;
     }
     mesh_count++;
@@ -9194,6 +9268,133 @@ static uint64_t wm_ios_immersive_scene_mesh_fingerprint(bContext *C)
     mix(uint64_t(active->mode));
   }
   return h;
+}
+
+static bool wm_ios_immersive_reload_live_meshes(bContext *C)
+{
+  Depsgraph *depsgraph = CTX_data_ensure_evaluated_depsgraph(C);
+  Scene *scene = CTX_data_scene(C);
+  ViewLayer *view_layer = CTX_data_view_layer(C);
+  if (depsgraph == nullptr || scene == nullptr || view_layer == nullptr) {
+    return false;
+  }
+  BKE_view_layer_synced_ensure(scene, view_layer);
+
+  constexpr int kMaxObjects = 48;
+  constexpr int kMaxVertsPerObject = 120000;
+  constexpr int kMaxVertsTotal = 400000;
+  constexpr int kMaxTrisTotal = 800000;
+
+  int verts_total = 0;
+  int tris_total = 0;
+  int pushed = 0;
+
+  GHOST_IOS_immersive_live_mesh_begin();
+
+  ListBase *bases = BKE_view_layer_object_bases_get(view_layer);
+  for (Base *base = static_cast<Base *>(bases->first); base != nullptr; base = base->next) {
+    Object *ob = base->object;
+    if (ob == nullptr || ob->type != OB_MESH) {
+      continue;
+    }
+    if (!wm_ios_immersive_object_visible_for_space(base, ob)) {
+      continue;
+    }
+    if (pushed >= kMaxObjects) {
+      break;
+    }
+
+    Object *ob_eval = DEG_get_evaluated(depsgraph, ob);
+    if (ob_eval == nullptr) {
+      continue;
+    }
+    const Mesh *mesh_eval = BKE_object_get_evaluated_mesh(ob_eval);
+    if (mesh_eval == nullptr || mesh_eval->verts_num <= 0 || mesh_eval->faces_num <= 0) {
+      continue;
+    }
+    if (mesh_eval->verts_num > kMaxVertsPerObject) {
+      fprintf(stderr,
+              "[immersive] live mesh skip %s verts=%d (cap %d)\n",
+              ob->id.name + 2,
+              mesh_eval->verts_num,
+              kMaxVertsPerObject);
+      fflush(stderr);
+      continue;
+    }
+
+    const blender::Span<blender::float3> positions = mesh_eval->vert_positions();
+    const blender::Span<int> corner_verts = mesh_eval->corner_verts();
+    const blender::Span<blender::int3> corner_tris = mesh_eval->corner_tris();
+    if (positions.is_empty() || corner_tris.is_empty()) {
+      continue;
+    }
+    if (verts_total + positions.size() > kMaxVertsTotal ||
+        tris_total + corner_tris.size() > kMaxTrisTotal)
+    {
+      fprintf(stderr, "[immersive] live mesh scene cap reached\n");
+      fflush(stderr);
+      break;
+    }
+
+    /* Bake rotation/scale into verts relative to object world translation so
+     * RealityKit entity.position can track Object Mode moves. */
+    const float (*obmat)[4] = ob_eval->object_to_world().ptr();
+    float loc[3];
+    copy_v3_v3(loc, ob_eval->object_to_world().location());
+
+    std::vector<float> verts(size_t(positions.size()) * 3);
+    for (const int i : positions.index_range()) {
+      float world[3];
+      mul_v3_m4v3(world, obmat, positions[i]);
+      verts[size_t(i) * 3 + 0] = world[0] - loc[0];
+      verts[size_t(i) * 3 + 1] = world[1] - loc[1];
+      verts[size_t(i) * 3 + 2] = world[2] - loc[2];
+    }
+
+    std::vector<unsigned int> indices(size_t(corner_tris.size()) * 3);
+    for (const int t : corner_tris.index_range()) {
+      const blender::int3 &tri = corner_tris[t];
+      indices[size_t(t) * 3 + 0] = unsigned(corner_verts[tri[0]]);
+      indices[size_t(t) * 3 + 1] = unsigned(corner_verts[tri[1]]);
+      indices[size_t(t) * 3 + 2] = unsigned(corner_verts[tri[2]]);
+    }
+
+    float r = 0.72f, g = 0.72f, b = 0.72f, a = 1.0f;
+    if (Material *ma = BKE_object_material_get(ob_eval, ob_eval->actcol > 0 ? ob_eval->actcol : 1))
+    {
+      r = ma->r;
+      g = ma->g;
+      b = ma->b;
+    }
+
+    GHOST_IOS_immersive_live_mesh_push(ob->id.name + 2,
+                                       int(positions.size()),
+                                       verts.data(),
+                                       int(corner_tris.size()),
+                                       indices.data(),
+                                       r,
+                                       g,
+                                       b,
+                                       a);
+    verts_total += int(positions.size());
+    tris_total += int(corner_tris.size());
+    pushed++;
+  }
+
+  if (pushed == 0) {
+    GHOST_IOS_immersive_live_mesh_commit(); /* clear staging */
+    return false;
+  }
+
+  GHOST_IOS_immersive_live_mesh_commit();
+  fprintf(stderr,
+          "[immersive] live mesh bridge: %d objects, %d verts, %d tris\n",
+          pushed,
+          verts_total,
+          tris_total);
+  fflush(stderr);
+  GHOST_IOS_diag_log("live mesh bridge commit");
+  return true;
 }
 
 static bool wm_ios_immersive_reload_usdz(bContext *C, Object *ob, const char *reason)
@@ -9215,12 +9416,21 @@ static bool wm_ios_immersive_reload_usdz(bContext *C, Object *ob, const char *re
     BKE_sculptsession_bm_to_me(ob);
   }
 
+  /* USD first for device stability; Live Mesh overlays when available.
+   * Preferring live-only caused 148 packaging/ABI risks to surface as "Immersive crash"
+   * and hid USD as a working fallback path. */
   if (!wm_ios_immersive_export_scene(C, usdz_path, false)) {
     GHOST_IOS_diag_log("geometry refresh FAILED");
     return false;
   }
   GHOST_IOS_immersive_reload_model(usdz_path);
   GHOST_IOS_multiuser_broadcast_usd(usdz_path);
+
+  if (wm_ios_immersive_reload_live_meshes(C)) {
+    fprintf(stderr, "[immersive] live mesh overlay ok (%s)\n", reason ? reason : "sync");
+    fflush(stderr);
+  }
+
   g_wm_ios_muse_geometry_dirty = false;
   fprintf(stderr, "[immersive] geometry refreshed (%s)\n", reason ? reason : "sync");
   fflush(stderr);
@@ -9352,10 +9562,31 @@ static void wm_ios_immersive_sync_impl(bContext *C)
     g_wm_ios_muse_geometry_dirty = true;
   }
 
+  /* Timeline frame change → Live Mesh must re-evaluate (armature / shape keys /
+   * object animation). Fingerprint ignores location, and Object Mode never
+   * entered the old mesh-sync branch, so Immersive stayed frozen on frame 1. */
+  static int last_immersive_cfra = 0;
+  static bool last_immersive_cfra_init = false;
+  bool frame_changed = false;
+  Scene *scene_for_anim = CTX_data_scene(C);
+  if (scene_for_anim != nullptr) {
+    const int cfra = scene_for_anim->r.cfra;
+    if (!last_immersive_cfra_init) {
+      last_immersive_cfra = cfra;
+      last_immersive_cfra_init = true;
+    }
+    else if (cfra != last_immersive_cfra) {
+      frame_changed = true;
+      last_immersive_cfra = cfra;
+      g_wm_ios_anim_frame_dirty = true;
+    }
+  }
+
   /* Lightweight Immersive transform bridge (no USD). When enabled, publish all
    * visible mesh world locations so RealityKit entities track Object Mode moves
-   * without a full scene reload. Structure/geo changes still use USD. */
-  if (g_wm_ios_sync_transforms_to_space) {
+   * without a full scene reload. Structure/geo changes still use USD.
+   * Also publish while the timeline is advancing so location keyframes move. */
+  if (g_wm_ios_sync_transforms_to_space || frame_changed || g_wm_ios_anim_frame_dirty) {
     constexpr int kMaxXforms = 96;
     char names_blob[kMaxXforms * 64];
     float xyz[kMaxXforms * 3];
@@ -9374,7 +9605,7 @@ static void wm_ios_immersive_sync_impl(bContext *C)
         if (mob == nullptr || mob->type != OB_MESH) {
           continue;
         }
-        if ((base->flag & BASE_ENABLED_AND_MAYBE_VISIBLE_IN_VIEWPORT) == 0) {
+        if (!wm_ios_immersive_object_visible_for_space(base, mob)) {
           continue;
         }
         const char *n = mob->id.name + 2;
@@ -9399,16 +9630,20 @@ static void wm_ios_immersive_sync_impl(bContext *C)
   /* Edit/sculpt mesh changes cannot be represented by transform updates.
    * Re-export the USDZ after a short debounce and ask RealityKit to reload.
    * While a Muse tip stroke is active, skip export; reload soon after release.
-   * Object-mode scene adds also use this path via g_wm_ios_muse_geometry_dirty. */
+   * Object-mode scene adds also use this path via g_wm_ios_muse_geometry_dirty.
+   * Animation frame changes use Live Mesh only (see anim branch below). */
   const bool mesh_edit_mode =
       (ob->mode & (OB_MODE_EDIT | OB_MODE_SCULPT | OB_MODE_VERTEX_PAINT)) != 0;
-  const bool need_visual_sync = mesh_edit_mode || scene_structure_changed ||
-                                active_object_changed || g_wm_ios_muse_geometry_dirty;
+  const bool need_usd_visual_sync = mesh_edit_mode || scene_structure_changed ||
+                                    active_object_changed || g_wm_ios_muse_geometry_dirty;
+  const bool need_anim_visual_sync = g_wm_ios_anim_frame_dirty || frame_changed;
+  const bool need_visual_sync = need_usd_visual_sync || need_anim_visual_sync;
   if (need_visual_sync) {
     Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C);
     static uint64_t last_update_count = 0;
     static uint64_t pending_update_count = 0;
     static double last_export_time = 0.0;
+    static double last_anim_export_time = 0.0;
     const uint64_t update_count = depsgraph ? DEG_get_update_count(depsgraph) : 0;
 
     const double now = BLI_time_now_seconds();
@@ -9439,19 +9674,41 @@ static void wm_ios_immersive_sync_impl(bContext *C)
     if (now - last_log_time >= 2.0) {
       last_log_time = now;
       fprintf(stderr,
-              "[immersive] mesh sync alive: mode=%d dirty=%d tip_down=%d pending=%d\n",
+              "[immersive] mesh sync alive: mode=%d dirty=%d anim=%d tip_down=%d pending=%d\n",
               ob->mode,
               int(g_wm_ios_muse_geometry_dirty),
+              int(g_wm_ios_anim_frame_dirty),
               g_wm_ios_muse_tip_down,
               int(pending_update_count != 0));
       fflush(stderr);
       char buf[160];
       SNPRINTF(buf,
-               "mesh sync dirty=%d tip=%d pending=%d",
+               "mesh sync dirty=%d anim=%d tip=%d pending=%d",
                int(g_wm_ios_muse_geometry_dirty),
+               int(g_wm_ios_anim_frame_dirty),
                g_wm_ios_muse_tip_down,
                int(pending_update_count != 0));
       GHOST_IOS_diag_log(buf);
+    }
+
+    /* Animation: Live Mesh only. Cap ~20 Hz so playback doesn't USD-storm. */
+    if (need_anim_visual_sync && !need_usd_visual_sync) {
+      const double anim_interval = std::min(0.05, double(g_wm_ios_usd_refresh_interval));
+      if ((now - last_anim_export_time) >= anim_interval) {
+        if (wm_ios_immersive_reload_live_meshes(C)) {
+          last_anim_export_time = now;
+          g_wm_ios_anim_frame_dirty = false;
+          fprintf(stderr, "[immersive] anim live mesh refresh cfra=%d\n",
+                  scene_for_anim ? scene_for_anim->r.cfra : -1);
+          fflush(stderr);
+          GHOST_IOS_diag_log("anim: live mesh refresh");
+        }
+        else {
+          /* Nothing pushed — still clear dirty so we don't spin. */
+          g_wm_ios_anim_frame_dirty = false;
+          last_anim_export_time = now;
+        }
+      }
     }
 
     /* Live Immersive refresh pacing — driven by Immersive sidebar
@@ -9462,7 +9719,7 @@ static void wm_ios_immersive_sync_impl(bContext *C)
                                 std::max(0.10, interval * 0.65) :
                             (scene_structure_changed || active_object_changed) ? interval :
                                                                                 std::max(interval, 0.20);
-    if (pending_update_count != 0 && (now - last_export_time) >= debounce) {
+    if (need_usd_visual_sync && pending_update_count != 0 && (now - last_export_time) >= debounce) {
       /* Avoid mid-stroke full-scene swap when only structure changed. */
       if (interaction_active && !tip_just_released && !g_wm_ios_muse_geometry_dirty &&
           (scene_structure_changed || active_object_changed))
@@ -9478,6 +9735,7 @@ static void wm_ios_immersive_sync_impl(bContext *C)
           last_export_time = now;
           last_update_count = depsgraph ? DEG_get_update_count(depsgraph) : last_update_count;
           pending_update_count = 0;
+          g_wm_ios_anim_frame_dirty = false;
           last_scene_fp = wm_ios_immersive_scene_mesh_fingerprint(C);
         }
       }
@@ -9676,6 +9934,102 @@ static void WM_OT_ios_immersive_multiuser_leave(wmOperatorType *ot)
   ot->idname = "WM_OT_ios_immersive_multiuser_leave";
   ot->description = "Leave the Immersive multiuser share session";
   ot->exec = wm_ios_multiuser_leave_exec;
+  ot->poll = wm_ios_immersive_poll;
+}
+
+static void wm_ios_spectator_align_sync_props(bContext *C)
+{
+  wmWindowManager *wm = CTX_wm_manager(C);
+  if (wm == nullptr) {
+    return;
+  }
+
+  char status[256] = "";
+  GHOST_IOS_spectator_align_status(status, sizeof(status));
+  const int state = GHOST_IOS_spectator_align_state();
+
+  PointerRNA wm_ptr = RNA_id_pointer_create(reinterpret_cast<ID *>(wm));
+  PointerRNA owner_ptr;
+  PropertyRNA *opts_prop = nullptr;
+  if (!RNA_path_resolve_property(&wm_ptr, "immersive_options", &owner_ptr, &opts_prop)) {
+    return;
+  }
+  PointerRNA opts_ptr = RNA_property_pointer_get(&owner_ptr, opts_prop);
+  if (opts_ptr.data == nullptr) {
+    return;
+  }
+  if (status[0] != '\0') {
+    RNA_string_set(&opts_ptr, "spectator_status", status);
+  }
+  RNA_boolean_set(&opts_ptr, "spectator_tracking", (state & 1) != 0);
+  RNA_boolean_set(&opts_ptr, "spectator_marker_visible", (state & 2) != 0);
+  RNA_boolean_set(&opts_ptr, "spectator_locked", (state & 4) != 0);
+}
+
+static wmOperatorStatus wm_ios_spectator_align_start_exec(bContext *C, wmOperator * /*op*/)
+{
+  GHOST_IOS_spectator_align_action(0);
+  wm_ios_spectator_align_sync_props(C);
+  WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+  return OPERATOR_FINISHED;
+}
+
+static wmOperatorStatus wm_ios_spectator_align_stop_exec(bContext *C, wmOperator * /*op*/)
+{
+  GHOST_IOS_spectator_align_action(1);
+  wm_ios_spectator_align_sync_props(C);
+  WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+  return OPERATOR_FINISHED;
+}
+
+static wmOperatorStatus wm_ios_spectator_align_lock_exec(bContext *C, wmOperator * /*op*/)
+{
+  GHOST_IOS_spectator_align_action(2);
+  wm_ios_spectator_align_sync_props(C);
+  WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+  return OPERATOR_FINISHED;
+}
+
+static wmOperatorStatus wm_ios_spectator_align_refresh_exec(bContext *C, wmOperator * /*op*/)
+{
+  wm_ios_spectator_align_sync_props(C);
+  WM_event_add_notifier(C, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+  return OPERATOR_FINISHED;
+}
+
+static void WM_OT_ios_spectator_align_start(wmOperatorType *ot)
+{
+  ot->name = "Spectator Align Start";
+  ot->idname = "WM_OT_ios_spectator_align_start";
+  ot->description = "Search for the iPad fullscreen marker to align Immersive space";
+  ot->exec = wm_ios_spectator_align_start_exec;
+  ot->poll = wm_ios_immersive_poll;
+}
+
+static void WM_OT_ios_spectator_align_stop(wmOperatorType *ot)
+{
+  ot->name = "Spectator Align Stop";
+  ot->idname = "WM_OT_ios_spectator_align_stop";
+  ot->description = "Stop iPad marker search";
+  ot->exec = wm_ios_spectator_align_stop_exec;
+  ot->poll = wm_ios_immersive_poll;
+}
+
+static void WM_OT_ios_spectator_align_lock(wmOperatorType *ot)
+{
+  ot->name = "Spectator Align Lock";
+  ot->idname = "WM_OT_ios_spectator_align_lock";
+  ot->description = "Lock Immersive origin to the detected iPad marker";
+  ot->exec = wm_ios_spectator_align_lock_exec;
+  ot->poll = wm_ios_immersive_poll;
+}
+
+static void WM_OT_ios_spectator_align_refresh(wmOperatorType *ot)
+{
+  ot->name = "Spectator Align Refresh";
+  ot->idname = "WM_OT_ios_spectator_align_refresh";
+  ot->description = "Refresh iPad marker alignment status in the Immersive panel";
+  ot->exec = wm_ios_spectator_align_refresh_exec;
   ot->poll = wm_ios_immersive_poll;
 }
 
@@ -9989,6 +10343,10 @@ void wm_operatortypes_register()
   WM_operatortype_append(WM_OT_ios_immersive_multiuser_host);
   WM_operatortype_append(WM_OT_ios_immersive_multiuser_join);
   WM_operatortype_append(WM_OT_ios_immersive_multiuser_leave);
+  WM_operatortype_append(WM_OT_ios_spectator_align_start);
+  WM_operatortype_append(WM_OT_ios_spectator_align_stop);
+  WM_operatortype_append(WM_OT_ios_spectator_align_lock);
+  WM_operatortype_append(WM_OT_ios_spectator_align_refresh);
 #endif
   WM_operatortype_append(WM_OT_previews_ensure);
   WM_operatortype_append(WM_OT_previews_clear);

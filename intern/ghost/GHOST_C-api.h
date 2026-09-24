@@ -156,6 +156,21 @@ extern bool GHOST_IOS_immersive_mode_is_active(void);
 extern bool GHOST_IOS_immersive_space_is_supported(void);
 /** Reload a completed USDZ export while the Immersive Space remains open. */
 extern void GHOST_IOS_immersive_reload_model(const char *usdz_path);
+/**
+ * Live Mesh Bridge: replace Immersive geometry from evaluated mesh buffers
+ * (no USD). begin → push* → commit. See GHOST_Vision_live_mesh_*.
+ */
+extern void GHOST_IOS_immersive_live_mesh_begin(void);
+extern void GHOST_IOS_immersive_live_mesh_push(const char *name,
+                                               int vert_count,
+                                               const float *verts_blender,
+                                               int tri_count,
+                                               const unsigned int *indices,
+                                               float r,
+                                               float g,
+                                               float b,
+                                               float a);
+extern void GHOST_IOS_immersive_live_mesh_commit(void);
 /** Push the active Blender object's transform state to the RealityKit view. */
 extern void GHOST_IOS_immersive_update_active_object(
     const char *object_name, float blender_x, float blender_y, float blender_z);
@@ -227,6 +242,11 @@ extern void GHOST_IOS_immersive_set_shader_space_enabled(bool enable);
 extern void GHOST_IOS_push_tablet_cursor(int x, int y, float pressure);
 /** Inject left-button down/up with stylus tablet pressure. */
 extern void GHOST_IOS_push_tablet_button(bool is_down, float pressure);
+
+/** iPad marker alignment controlled from Blender's existing Immersive N-panel. */
+extern void GHOST_IOS_spectator_align_action(int action);
+extern int GHOST_IOS_spectator_align_state(void);
+extern void GHOST_IOS_spectator_align_status(char *dst, int dst_size);
 
 /**
  * Multi Vision Pro Immersive share (MultipeerConnectivity).

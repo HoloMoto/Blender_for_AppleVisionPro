@@ -18,6 +18,8 @@ public extension Notification.Name {
   static let blenderDismissImmersiveSpace = Notification.Name("blender.dismissImmersiveSpace")
   static let blenderImmersiveModelPathChanged = Notification.Name(
     "blender.immersiveModelPathChanged")
+  static let blenderImmersiveLiveMeshesChanged = Notification.Name(
+    "blender.immersiveLiveMeshesChanged")
   static let blenderImmersiveActiveObjectChanged = Notification.Name(
     "blender.immersiveActiveObjectChanged")
   static let blenderImmersiveObjectTransformsChanged = Notification.Name(
@@ -49,6 +51,10 @@ public extension Notification.Name {
 
   @objc public private(set) var modelPath: String?
   @objc public private(set) var modelRevision: UInt64 = 0
+  /** Live Mesh Bridge payloads (evaluated meshes, no USD). */
+  public private(set) var liveMeshes: [BlenderImmersiveLiveMeshPayload] = []
+  @objc public private(set) var liveMeshRevision: UInt64 = 0
+  @objc public private(set) var liveMeshActive: Bool = false
   @objc public private(set) var isActive: Bool = false
   @objc public private(set) var activeObjectName: String?
   @objc public private(set) var activeObjectX: Float = 0
@@ -136,8 +142,38 @@ public extension Notification.Name {
   @objc public func updateModelPath(_ path: String?) {
     modelPath = path
     modelRevision &+= 1
+    /* USD reload supersedes live mesh until the next live commit. */
+    if path != nil {
+      liveMeshActive = false
+    }
     NotificationCenter.default.post(
       name: .blenderImmersiveModelPathChanged, object: path)
+  }
+
+  /** Staging buffer while C++ pushes meshes between begin/commit. */
+  private var liveMeshStaging: [BlenderImmersiveLiveMeshPayload] = []
+
+  @objc public func liveMeshBegin() {
+    liveMeshStaging = []
+  }
+
+  @objc public func liveMeshPushName(
+    _ name: String?, verts: Data?, indices: Data?, r: Float, g: Float, b: Float, a: Float
+  ) {
+    guard let name, !name.isEmpty, let verts, let indices, !verts.isEmpty, !indices.isEmpty else {
+      return
+    }
+    liveMeshStaging.append(
+      BlenderImmersiveLiveMeshPayload(
+        name: name, verts: verts, indices: indices, color: SIMD4(r, g, b, a)))
+  }
+
+  @objc public func liveMeshCommit() {
+    liveMeshes = liveMeshStaging
+    liveMeshStaging = []
+    liveMeshRevision &+= 1
+    liveMeshActive = !liveMeshes.isEmpty
+    NotificationCenter.default.post(name: .blenderImmersiveLiveMeshesChanged, object: nil)
   }
 
   @objc public func markActive(_ active: Bool) {

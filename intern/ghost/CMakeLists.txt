@@ -209,6 +209,7 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
         list(APPEND SRC
           intern/immersive/BlenderImmersiveCoords.swift
           intern/immersive/BlenderImmersiveState.swift
+          intern/immersive/BlenderImmersiveLiveMesh.swift
           intern/immersive/BlenderImmersiveBridge.swift
           intern/immersive/BlenderImmersiveMusePen.swift
           intern/immersive/BlenderImmersiveHandPen.swift
@@ -220,6 +221,8 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
           intern/immersive/BlenderImmersiveShaderOverlay.swift
           intern/immersive/BlenderImmersiveMultiuser.swift
           intern/immersive/BlenderImmersiveSharedAnchor.swift
+          intern/immersive/BlenderImmersiveSpectatorAlign.swift
+          intern/immersive/BlenderImmersiveMRC.swift
           intern/immersive/BlenderImmersiveSpaceView.swift
           intern/immersive/BlenderIOSDiagnosticLog.swift
           intern/immersive/BlenderVisionApp.swift

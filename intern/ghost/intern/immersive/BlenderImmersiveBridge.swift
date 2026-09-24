@@ -186,6 +186,71 @@ public final class BlenderImmersiveBridge: NSObject {
     #endif
   }
 
+  /** Existing Blender N-panel bridge: 0=start, 1=stop, 2=lock. */
+  @objc public static func spectatorAlignAction(_ action: Int32) {
+    #if os(visionOS)
+      DispatchQueue.main.async {
+        let controller = BlenderImmersiveSpectatorAlignController.shared
+        switch action {
+        case 0:
+          Task { await controller.startTracking() }
+        case 1:
+          Task { await controller.stopTracking() }
+        case 2:
+          Task { await controller.lockAlignment() }
+        default:
+          break
+        }
+      }
+    #endif
+  }
+
+  @objc public static func spectatorAlignStatus() -> String {
+    #if os(visionOS)
+      var text = "iPad合わせ: 待機"
+      let read = {
+        MainActor.assumeIsolated {
+          text = BlenderImmersiveSpectatorAlignController.shared.statusText
+        }
+      }
+      if Thread.isMainThread {
+        read()
+      }
+      else {
+        DispatchQueue.main.sync(execute: read)
+      }
+      return text
+    #else
+      return "利用不可"
+    #endif
+  }
+
+  /** bit 0=tracking, bit 1=marker visible, bit 2=locked, bit 3=iPad pose. */
+  @objc public static func spectatorAlignState() -> Int32 {
+    #if os(visionOS)
+      var state: Int32 = 0
+      let pack = {
+        MainActor.assumeIsolated {
+          let controller = BlenderImmersiveSpectatorAlignController.shared
+          state = 0
+          if controller.isTracking { state |= 1 }
+          if controller.markerVisible { state |= 2 }
+          if controller.locked { state |= 4 }
+          if controller.hasIpadPose { state |= 8 }
+        }
+      }
+      if Thread.isMainThread {
+        pack()
+      }
+      else {
+        DispatchQueue.main.sync(execute: pack)
+      }
+      return state
+    #else
+      return 0
+    #endif
+  }
+
   @objc public static func multiuserHost(_ displayName: String?) -> Bool {
     #if os(visionOS)
       return BlenderImmersiveMultiuserSession.shared.hostSession(displayName: displayName)
@@ -236,6 +301,48 @@ public final class BlenderImmersiveBridge: NSObject {
     #if os(visionOS)
       guard let path, !path.isEmpty else { return }
       BlenderImmersiveMultiuserSession.shared.broadcastUSD(at: path)
+    #endif
+  }
+
+  @objc public static func liveMeshBegin() {
+    #if os(visionOS)
+      let apply = { BlenderImmersiveState.shared.liveMeshBegin() }
+      if Thread.isMainThread {
+        apply()
+      }
+      else {
+        DispatchQueue.main.sync(execute: apply)
+      }
+    #endif
+  }
+
+  @objc(liveMeshPushName:verts:indices:r:g:b:a:)
+  public static func liveMeshPushName(
+    _ name: String?, verts: Data?, indices: Data?, r: Float, g: Float, b: Float, a: Float
+  ) {
+    #if os(visionOS)
+      let apply = {
+        BlenderImmersiveState.shared.liveMeshPushName(
+          name, verts: verts, indices: indices, r: r, g: g, b: b, a: a)
+      }
+      if Thread.isMainThread {
+        apply()
+      }
+      else {
+        DispatchQueue.main.sync(execute: apply)
+      }
+    #endif
+  }
+
+  @objc public static func liveMeshCommit() {
+    #if os(visionOS)
+      let apply = { BlenderImmersiveState.shared.liveMeshCommit() }
+      if Thread.isMainThread {
+        apply()
+      }
+      else {
+        DispatchQueue.main.sync(execute: apply)
+      }
     #endif
   }
 }
