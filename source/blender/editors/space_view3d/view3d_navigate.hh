@@ -314,6 +314,9 @@ extern const ViewOpsType ViewOpsType_roll;
 
 void viewrotate_modal_keymap(wmKeyConfig *keyconf);
 void VIEW3D_OT_rotate(wmOperatorType *ot);
+#ifdef WITH_APPLE_CROSSPLATFORM
+void VIEW3D_OT_touch_orbit(wmOperatorType *ot);
+#endif
 
 extern const ViewOpsType ViewOpsType_rotate;
 

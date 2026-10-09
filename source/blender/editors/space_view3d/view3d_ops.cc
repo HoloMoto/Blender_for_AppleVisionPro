@@ -180,6 +180,9 @@ static void VIEW3D_OT_pastebuffer(wmOperatorType *ot)
 void view3d_operatortypes()
 {
   WM_operatortype_append(VIEW3D_OT_rotate);
+#ifdef WITH_APPLE_CROSSPLATFORM
+  WM_operatortype_append(VIEW3D_OT_touch_orbit);
+#endif
   WM_operatortype_append(VIEW3D_OT_move);
   WM_operatortype_append(VIEW3D_OT_zoom);
   WM_operatortype_append(VIEW3D_OT_zoom_camera_1_to_1);

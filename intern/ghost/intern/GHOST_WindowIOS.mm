@@ -64,6 +64,8 @@ typedef struct UserInputEvent {
   CGPoint translation;
   CGFloat distance;
   bool pencil_used;
+  /** #LEFT_BUTTON_DOWN starts a finger drag (see #GHOST_TEventButtonData::is_touch_drag). */
+  bool touch_drag;
 
   UserInputEvent(CGPoint *loc, CGPoint *tran, CGFloat *dist, bool pencil)
   {
@@ -72,6 +74,7 @@ typedef struct UserInputEvent {
     translation = tran ? *tran : CGPointMake(0.0f, 0.0f);
     distance = dist ? *dist : 0.0f;
     pencil_used = pencil;
+    touch_drag = false;
   }
 
   void add_event(EventTypes event_type)
@@ -559,7 +562,8 @@ typedef struct UserInputEvent {
                                     GHOST_kEventButtonDown,
                                     window,
                                     GHOST_kButtonMaskLeft,
-                                    tablet_data));
+                                    tablet_data,
+                                    event_info.touch_drag));
           break;
         case UserInputEvent::EventTypes::LEFT_BUTTON_UP:
           system->pushEvent(
@@ -905,6 +909,8 @@ typedef struct UserInputEvent {
       [sender setCachedTranslation:translation];
       event_info.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
       event_info.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_DOWN);
+      /* Pencil touches never reach this recognizer, but a pencil may be down concurrently. */
+      event_info.touch_drag = !pencil_pan;
     }
 
     /* Calculate translation change since last begin/change event */

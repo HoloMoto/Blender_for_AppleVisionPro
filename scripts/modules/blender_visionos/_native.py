@@ -19,12 +19,18 @@ from ctypes import (
 )
 
 
-API_VERSION = 2
+API_VERSION = 3
 
 CAP_NONE = 0
 CAP_HAND_TRACKING = 1 << 0
 CAP_IMMERSIVE_ACTIVE = 1 << 1
 CAP_REALITYKIT_SCENE = 1 << 2
+CAP_VIEWER_POSE = 1 << 3
+
+TOUCH_NAV_TWO_FINGER_PAN = 1 << 0
+TOUCH_NAV_EMPTY_ORBIT = 1 << 1
+TOUCH_NAV_DRAG_PAN = 1 << 2
+TOUCH_NAV_DEFAULT = TOUCH_NAV_TWO_FINGER_PAN | TOUCH_NAV_EMPTY_ORBIT
 
 WORLD_MESH_MAX_VERTS = 16384
 WORLD_MESH_MAX_INDICES = 49152
@@ -76,6 +82,19 @@ class WorldMeshMeta(Structure):
     )
 
 
+class ViewerSnapshot(Structure):
+    _fields_ = (
+        ("struct_size", c_uint32),
+        ("api_version", c_uint32),
+        ("timestamp", c_double),
+        ("immersive_active", c_uint32),
+        ("valid", c_uint32),
+        ("location", c_float * 3),
+        ("orientation_quat", c_float * 4),  # w, x, y, z
+        ("matrix", c_float * 16),  # column-major
+    )
+
+
 def _load_lib():
     # Symbols are linked into the Blender main executable.
     names = []
@@ -97,10 +116,15 @@ _FN_CAPS = None
 _FN_HAND = None
 _FN_WORLD_MESH_META = None
 _FN_WORLD_MESH_COPY = None
+_FN_VIEWER = None
+_FN_TOUCH_NAV_GET = None
+_FN_TOUCH_NAV_SET = None
 
 
 def _lib():
-    global _LIB, _FN_AVAILABLE, _FN_CAPS, _FN_HAND, _FN_WORLD_MESH_META, _FN_WORLD_MESH_COPY
+    global _LIB, _FN_AVAILABLE, _FN_CAPS, _FN_HAND
+    global _FN_WORLD_MESH_META, _FN_WORLD_MESH_COPY, _FN_VIEWER
+    global _FN_TOUCH_NAV_GET, _FN_TOUCH_NAV_SET
     if _LIB is not None:
         return _LIB
     lib = _load_lib()
@@ -136,6 +160,24 @@ def _lib():
         # Older host builds (API v1) — world mesh symbols not linked yet.
         _FN_WORLD_MESH_META = None
         _FN_WORLD_MESH_COPY = None
+    try:
+        lib.BLENDER_VISIONOS_viewer_snapshot.restype = c_int
+        lib.BLENDER_VISIONOS_viewer_snapshot.argtypes = [POINTER(ViewerSnapshot)]
+        _FN_VIEWER = lib.BLENDER_VISIONOS_viewer_snapshot
+    except AttributeError:
+        # Pre-TF-153 hosts — viewer pose not published yet.
+        _FN_VIEWER = None
+    try:
+        lib.BLENDER_VISIONOS_touch_navigation.restype = c_uint32
+        lib.BLENDER_VISIONOS_touch_navigation.argtypes = []
+        lib.BLENDER_VISIONOS_set_touch_navigation.restype = None
+        lib.BLENDER_VISIONOS_set_touch_navigation.argtypes = [c_uint32]
+        _FN_TOUCH_NAV_GET = lib.BLENDER_VISIONOS_touch_navigation
+        _FN_TOUCH_NAV_SET = lib.BLENDER_VISIONOS_set_touch_navigation
+    except AttributeError:
+        # Pre-TF-158 hosts — window touch navigation is fixed (two-finger orbit).
+        _FN_TOUCH_NAV_GET = None
+        _FN_TOUCH_NAV_SET = None
     _LIB = lib
     return _LIB
 
@@ -205,3 +247,34 @@ def world_mesh_copy_raw(
     vcount = min(int(vertex_count.value), max_verts)
     icount = min(int(index_count.value), max_indices)
     return True, list(xyz_buf[: vcount * 3]), list(idx_buf[:icount])
+
+
+def touch_navigation_available() -> bool:
+    lib = _lib()
+    return bool(lib) and _FN_TOUCH_NAV_GET is not None
+
+
+def touch_navigation() -> int:
+    """Current ``TOUCH_NAV_*`` flags, or -1 when the host does not support them."""
+    if not touch_navigation_available():
+        return -1
+    return int(_FN_TOUCH_NAV_GET())
+
+
+def set_touch_navigation(flags: int) -> bool:
+    if not touch_navigation_available():
+        return False
+    _FN_TOUCH_NAV_SET(c_uint32(int(flags) & 0xFFFFFFFF))
+    return True
+
+
+def viewer_snapshot_raw() -> tuple[bool, ViewerSnapshot]:
+    snap = ViewerSnapshot()
+    snap.struct_size = ctypes.sizeof(ViewerSnapshot)
+    snap.api_version = API_VERSION
+    snap.orientation_quat[0] = 1.0
+    lib = _lib()
+    if not lib or _FN_VIEWER is None:
+        return False, snap
+    ok = int(_FN_VIEWER(ctypes.byref(snap))) == 1
+    return ok, snap

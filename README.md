@@ -22,7 +22,7 @@ Status
 |---|---|
 | Track | **Blender 5.0 line** (marketing `5.0.1`) |
 | Branch | **`immersive-space`** (remote `visionpro` → [HoloMoto/Blender_for_AppleVisionPro](https://github.com/HoloMoto/Blender_for_AppleVisionPro)) |
-| Latest TestFlight (Vision Pro) | **157** — Preferences persist across restarts (add-ons, themes, keymaps, all `userpref.blend` settings) |
+| Latest TestFlight (Vision Pro) | **158** — Nomad-style touch navigation in the 3D Viewport (two-finger pan, pinch zoom, one-finger orbit on empty space); includes 157 Preferences persistence |
 | 5.3 line | Paused (`immersive-space-53`). Not shipped until it launches as reliably as 5.0 |
 
 Experimental. Usable for development and testing on device; not a release build.
@@ -48,6 +48,11 @@ Features (visionOS)
 - **Logitech Muse** spatial pen: pressure sculpting, near-mesh brush switching,
   far-from-mesh secondary button opens a **brush pie menu**
 - Hand Menu (shown only when the palm faces the user), hand tracking API for add-ons
+- **Nomad-style touch navigation** in the window 3D Viewport (finger input only):
+  two-finger drag pans, pinch zooms, one-finger drag starting on empty space orbits.
+  A drag on the mesh still sculpts / selects; gizmos, taps, pen and pointer input are unchanged.
+  Toggle: **View → Nomad-Style Touch Navigation** or
+  **Preferences → Navigation → Orbit & Pan → Touch (Vision Pro)** (default on, saved across restarts)
 
 **Audio**
 

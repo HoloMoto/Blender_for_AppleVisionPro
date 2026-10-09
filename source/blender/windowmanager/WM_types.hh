@@ -703,6 +703,11 @@ enum eWM_EventFlag {
    * Mouse-move on trackpad/touch screen where three fingers triggered the event.
    */
   WM_EVENT_MULTITOUCH_THREE_FINGERS = (1 << 4),
+  /**
+   * Button press that starts a finger drag on a touch screen (already past the drag threshold).
+   * Never set for taps, pen or pointer input.
+   */
+  WM_EVENT_TOUCH_DRAG = (1 << 5),
 };
 ENUM_OPERATORS(eWM_EventFlag, WM_EVENT_FORCE_DRAG_THRESHOLD);
 

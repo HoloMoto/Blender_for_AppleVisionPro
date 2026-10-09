@@ -17,6 +17,7 @@
 #include "WM_api.hh"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -45,6 +46,18 @@ static uint32_t g_world_mesh_revision = 0;
 static bool g_world_mesh_available = false;
 static bool g_world_mesh_truncated = false;
 static double g_world_mesh_timestamp = 0.0;
+
+static std::atomic<uint32_t> g_touch_navigation{BLENDER_VISIONOS_TOUCH_NAV_DEFAULT};
+
+extern "C" void BLENDER_VISIONOS_set_touch_navigation(uint32_t flags)
+{
+  g_touch_navigation.store(flags);
+}
+
+extern "C" uint32_t BLENDER_VISIONOS_touch_navigation(void)
+{
+  return g_touch_navigation.load();
+}
 
 static void wm_ios_visionos_world_mesh_clear()
 {

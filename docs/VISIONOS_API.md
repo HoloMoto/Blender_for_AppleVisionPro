@@ -226,7 +226,22 @@ void BLENDER_VISIONOS_world_mesh_publish(uint32_t revision, const float *xyz,
 
 /* visionOS stdout bridge */
 void BLENDER_IOS_py_stdout_line(const char *line, int is_err);
+
+/* Window 3D Viewport touch navigation (build 158+) */
+enum {
+  BLENDER_VISIONOS_TOUCH_NAV_TWO_FINGER_PAN = 1u << 0, /* two-finger drag pans (else orbits) */
+  BLENDER_VISIONOS_TOUCH_NAV_EMPTY_ORBIT = 1u << 1,    /* one-finger drag on empty space orbits */
+  BLENDER_VISIONOS_TOUCH_NAV_DRAG_PAN = 1u << 2,       /* every one-finger drag pans (pose override) */
+};
+void BLENDER_VISIONOS_set_touch_navigation(uint32_t flags);
+uint32_t BLENDER_VISIONOS_touch_navigation(void);
 ```
+
+Python: `blender_visionos._native.touch_navigation()` / `set_touch_navigation(flags)`
+(returns `-1` / no-op on hosts older than 158). The user-facing toggle lives in
+`blender_ios_touch_nav` (`WindowManager.vp_touch_nomad_navigation`, persisted to
+`config/touch_navigation.json`); add-ons can call `blender_ios_touch_nav.set_drag_pan_override(True)`
+to make one-finger drags pan while a hand pose is held.
 
 Compatibility rules for add-on authors:
 
@@ -268,7 +283,8 @@ Look for output in the **Info** editor (report list), not a terminal window.
 | Capability | Status |
 |------------|--------|
 | Hand tracking (wrist / palm / thumb / index + pinch) | **Shipped** (API v1) |
-| Middle / ring / little tips | ABI reserved; filled from palm until OS/SDK grows |
+| Middle / ring / little tips | ABI reserved; filled from palm today. Planned (159): RealityKit hand-joint anchors + pose-driven touch pan |
+| Window 3D Viewport touch navigation | **Shipped** (build 158) — see [C ABI](#c-abi-for-native--ctypes) |
 | `print` → Info | **Shipped** (build 90+) |
 | RealityKit scene spawn / query | Reserved bit only |
 | World mesh (ARKit scene reconstruction) | **Shipped** (API v2) — see [World mesh](#world-mesh--blender_visionosworld_mesh) |

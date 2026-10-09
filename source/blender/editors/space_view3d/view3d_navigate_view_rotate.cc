@@ -11,10 +11,17 @@
 #include "BLI_math_matrix.h"
 #include "BLI_math_rotation.h"
 #include "BLI_math_vector.h"
+#include "BLI_string_ref.hh"
+
+#include "DNA_view3d_types.h"
+#include "DNA_workspace_types.h"
 
 #include "WM_api.hh"
+#include "WM_ios_visionos_api.h"
+#include "WM_toolsystem.hh"
 
 #include "ED_screen.hh"
+#include "ED_view3d.hh"
 
 #include "view3d_intern.hh"
 #include "view3d_navigate.hh" /* own include */
@@ -372,6 +379,13 @@ static wmOperatorStatus viewrotate_invoke(bContext *C, wmOperator *op, const wmE
   if (!(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS)) {
     return OPERATOR_FINISHED;
   }
+  /* Two-finger drag pans (one-finger drag on empty space orbits, see #VIEW3D_OT_touch_orbit). */
+  if ((event->type == MOUSEPAN) &&
+      (BLENDER_VISIONOS_touch_navigation() & BLENDER_VISIONOS_TOUCH_NAV_TWO_FINGER_PAN) &&
+      view3d_location_poll(C))
+  {
+    return view3d_navigate_invoke_impl(C, op, event, &ViewOpsType_move);
+  }
 #endif
 
   return view3d_navigate_invoke_impl(C, op, event, &ViewOpsType_rotate);
@@ -397,6 +411,123 @@ void VIEW3D_OT_rotate(wmOperatorType *ot)
 }
 
 /** \} */
+
+#ifdef WITH_APPLE_CROSSPLATFORM
+
+/* -------------------------------------------------------------------- */
+/** \name Touch Orbit Operator
+ *
+ * Invoked by the window-manager for a finger drag in the 3D viewport, before the active tool
+ * sees the press (see `wm_event_touch_navigate`). Orbits when the drag starts on empty space,
+ * otherwise passes the press through to the tool:
+ *
+ * - Sculpt / paint modes with a brush tool: empty means the active object is not under the
+ *   finger, so strokes that start on the mesh are untouched.
+ * - Object / edit / pose modes with a select tool: empty means no geometry under the finger,
+ *   so the drag orbits instead of box-selecting. Other tools (transform, cursor, annotate,
+ *   add, ...) always receive the press.
+ * - Any other mode or tool: pass through.
+ *
+ * With #BLENDER_VISIONOS_TOUCH_NAV_DRAG_PAN every drag pans instead.
+ * \{ */
+
+static bool touch_orbit_tool_uses_empty_space(const bContext *C, bool *r_paint_mode)
+{
+  const bToolRef *tref = WM_toolsystem_ref_from_context(C);
+  if (tref == nullptr) {
+    return false;
+  }
+  const blender::StringRef idname = tref->idname;
+
+  switch (CTX_data_mode_enum(C)) {
+    case CTX_MODE_SCULPT:
+    case CTX_MODE_PAINT_WEIGHT:
+    case CTX_MODE_PAINT_VERTEX:
+    case CTX_MODE_PAINT_TEXTURE:
+      *r_paint_mode = true;
+      return (idname == "builtin.brush") || idname.startswith("builtin_brush.");
+    case CTX_MODE_OBJECT:
+    case CTX_MODE_POSE:
+    case CTX_MODE_EDIT_MESH:
+    case CTX_MODE_EDIT_CURVE:
+    case CTX_MODE_EDIT_SURFACE:
+    case CTX_MODE_EDIT_ARMATURE:
+    case CTX_MODE_EDIT_METABALL:
+    case CTX_MODE_EDIT_LATTICE:
+    case CTX_MODE_EDIT_CURVES:
+    case CTX_MODE_EDIT_POINTCLOUD:
+      *r_paint_mode = false;
+      return idname.startswith("builtin.select");
+    default:
+      return false;
+  }
+}
+
+static bool touch_orbit_geometry_under_cursor(bContext *C, const int mval[2], bool paint_mode)
+{
+  Depsgraph *depsgraph = CTX_data_ensure_evaluated_depsgraph(C);
+  ARegion *region = CTX_wm_region(C);
+  View3D *v3d = CTX_wm_view3d(C);
+
+  view3d_operator_needs_gpu(C);
+  /* A cached depth buffer may hold a different object set (or a stale view). */
+  v3d->runtime.flag &= ~V3D_RUNTIME_DEPTHBUF_OVERRIDDEN;
+  ED_view3d_depth_override(depsgraph,
+                           region,
+                           v3d,
+                           nullptr,
+                           paint_mode ? V3D_DEPTH_OBJECT_ONLY : V3D_DEPTH_NO_GPENCIL,
+                           false,
+                           nullptr);
+  float co[3];
+  return ED_view3d_autodist(region, v3d, mval, co, nullptr);
+}
+
+static wmOperatorStatus touch_orbit_invoke(bContext *C, wmOperator *op, const wmEvent *event)
+{
+  const uint32_t nav = BLENDER_VISIONOS_touch_navigation();
+  if (nav & BLENDER_VISIONOS_TOUCH_NAV_DRAG_PAN) {
+    if (!view3d_location_poll(C)) {
+      return OPERATOR_PASS_THROUGH;
+    }
+    return view3d_navigate_invoke_impl(C, op, event, &ViewOpsType_move);
+  }
+  if ((nav & BLENDER_VISIONOS_TOUCH_NAV_EMPTY_ORBIT) == 0) {
+    return OPERATOR_PASS_THROUGH;
+  }
+
+  bool paint_mode = false;
+  if (!touch_orbit_tool_uses_empty_space(C, &paint_mode)) {
+    return OPERATOR_PASS_THROUGH;
+  }
+  if (touch_orbit_geometry_under_cursor(C, event->mval, paint_mode)) {
+    return OPERATOR_PASS_THROUGH;
+  }
+  return view3d_navigate_invoke_impl(C, op, event, &ViewOpsType_rotate);
+}
+
+void VIEW3D_OT_touch_orbit(wmOperatorType *ot)
+{
+  /* identifiers */
+  ot->name = "Touch Orbit";
+  ot->description = "Orbit the view with a finger drag that starts on empty space";
+  ot->idname = "VIEW3D_OT_touch_orbit";
+
+  /* API callbacks. */
+  ot->invoke = touch_orbit_invoke;
+  ot->modal = view3d_navigate_modal_fn;
+  ot->poll = view3d_rotation_poll;
+  ot->cancel = view3d_navigate_cancel_fn;
+
+  /* No cursor grab: touch positions are absolute and cannot be warped. */
+  ot->flag = OPTYPE_BLOCKING | OPTYPE_INTERNAL;
+
+  view3d_operator_properties_common(ot, V3D_OP_PROP_USE_MOUSE_INIT);
+}
+
+/** \} */
+
+#endif /* WITH_APPLE_CROSSPLATFORM */
 
 const ViewOpsType ViewOpsType_rotate = {
     /*flag*/ (VIEWOPS_FLAG_DEPTH_NAVIGATE | VIEWOPS_FLAG_PERSP_ENSURE | VIEWOPS_FLAG_ORBIT_SELECT),

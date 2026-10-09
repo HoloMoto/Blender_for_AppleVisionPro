@@ -75,6 +75,7 @@
 #include "UI_view2d.hh"
 
 #include "WM_api.hh"
+#include "WM_ios_visionos_api.h"
 #include "WM_keymap.hh"
 #include "WM_message.hh"
 #include "WM_toolsystem.hh"
@@ -4625,6 +4626,57 @@ static void wm_event_handle_xrevent(bContext *C,
 }
 #endif /* WITH_XR_OPENXR */
 
+#ifdef WITH_APPLE_CROSSPLATFORM
+/**
+ * Touch-screen navigation for the 3D viewport: a finger drag that starts on empty space
+ * orbits the view. This runs before the region handlers so it takes priority over the active
+ * tool (which would otherwise receive the press first). #VIEW3D_OT_touch_orbit passes through
+ * whenever the press should reach the tool (geometry or a gizmo under the finger, ...).
+ */
+static bool wm_event_touch_navigate(bContext *C, wmEvent *event, ARegion *region)
+{
+  if (!(event->flag & WM_EVENT_TOUCH_DRAG) || (event->type != LEFTMOUSE) ||
+      (event->val != KM_PRESS))
+  {
+    return false;
+  }
+  if ((BLENDER_VISIONOS_touch_navigation() &
+       (BLENDER_VISIONOS_TOUCH_NAV_EMPTY_ORBIT | BLENDER_VISIONOS_TOUCH_NAV_DRAG_PAN)) == 0)
+  {
+    return false;
+  }
+  const ScrArea *area = CTX_wm_area(C);
+  if ((area == nullptr) || (area->spacetype != SPACE_VIEW3D) ||
+      (region->regiontype != RGN_TYPE_WINDOW))
+  {
+    return false;
+  }
+  /* Gizmos (navigation buttons, transform handles, ...) keep their own drag behavior. */
+  if (wmGizmoMap *gzmap = region->runtime->gizmo_map) {
+    int part = -1;
+    if (wm_gizmomap_highlight_get(gzmap) || wm_gizmomap_highlight_find(gzmap, C, event, &part)) {
+      return false;
+    }
+  }
+  wmOperatorType *ot = WM_operatortype_find("VIEW3D_OT_touch_orbit", true);
+  if (ot == nullptr) {
+    return false;
+  }
+  const wmOperatorStatus retval = wm_operator_invoke(
+      C, ot, event, nullptr, nullptr, false, false);
+  if ((retval & OPERATOR_PASS_THROUGH) ||
+      !(retval & (OPERATOR_RUNNING_MODAL | OPERATOR_FINISHED)))
+  {
+    return false;
+  }
+  if (wmWindow *win = CTX_wm_window(C)) {
+    win->event_queue_check_click = false;
+    win->event_queue_check_drag = false;
+  }
+  return true;
+}
+#endif /* WITH_APPLE_CROSSPLATFORM */
+
 static eHandlerActionFlag wm_event_do_region_handlers(bContext *C, wmEvent *event, ARegion *region)
 {
   if (region->runtime->type->do_lock) {
@@ -4650,6 +4702,12 @@ static eHandlerActionFlag wm_event_do_region_handlers(bContext *C, wmEvent *even
       wm_drags_check_ops(C, event);
     }
   }
+
+#ifdef WITH_APPLE_CROSSPLATFORM
+  if (wm_event_touch_navigate(C, event, region)) {
+    return WM_HANDLER_BREAK;
+  }
+#endif
 
   return wm_handlers_do(C, event, &region->runtime->handlers);
 }
@@ -6745,6 +6803,9 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
        * GHOST should never generate unknown events and this logic can probably be removed. */
       event.val = (type == GHOST_kEventButtonDown) ? KM_PRESS : KM_RELEASE;
       event.type = wm_event_type_from_ghost_button(bd->button, MIDDLEMOUSE);
+      if (bd->is_touch_drag && (event.val == KM_PRESS)) {
+        event.flag |= WM_EVENT_TOUCH_DRAG;
+      }
 
       /* Get tablet data. */
       wm_tablet_data_from_ghost(&bd->tablet, &event.tablet);
@@ -6774,6 +6835,7 @@ void wm_event_add_ghostevent(wmWindowManager *wm,
         event_other.type = event.type;
         event_other.val = event.val;
         event_other.tablet = event.tablet;
+        event_other.flag = event.flag;
 
         wm_event_add_intern(win_other, &event_other);
       }

@@ -166,6 +166,29 @@ typedef struct BLENDER_VISIONOS_ViewerSnapshot {
  */
 int BLENDER_VISIONOS_viewer_snapshot(BLENDER_VISIONOS_ViewerSnapshot *out);
 
+/**
+ * Touch navigation in the (non-Immersive) window 3D viewport, finger input only.
+ * Pen / Muse and pointer (mouse, trackpad) input are never affected.
+ */
+enum {
+  /** Two-finger drag pans the view (otherwise it orbits). Pinch zoom is unchanged. */
+  BLENDER_VISIONOS_TOUCH_NAV_TWO_FINGER_PAN = 1u << 0,
+  /** One-finger drag that starts on empty space orbits the view (see #VIEW3D_OT_touch_orbit). */
+  BLENDER_VISIONOS_TOUCH_NAV_EMPTY_ORBIT = 1u << 1,
+  /**
+   * Temporary override (e.g. while a hand pose is held): every one-finger drag in the viewport
+   * pans the view, regardless of what is under the finger or the active tool.
+   */
+  BLENDER_VISIONOS_TOUCH_NAV_DRAG_PAN = 1u << 2,
+};
+#define BLENDER_VISIONOS_TOUCH_NAV_DEFAULT \
+  (BLENDER_VISIONOS_TOUCH_NAV_TWO_FINGER_PAN | BLENDER_VISIONOS_TOUCH_NAV_EMPTY_ORBIT)
+
+/** Replace the touch navigation flags (#BLENDER_VISIONOS_TOUCH_NAV_*). */
+void BLENDER_VISIONOS_set_touch_navigation(uint32_t flags);
+/** Current touch navigation flags, #BLENDER_VISIONOS_TOUCH_NAV_DEFAULT until changed. */
+uint32_t BLENDER_VISIONOS_touch_navigation(void);
+
 #ifdef __cplusplus
 }
 #endif

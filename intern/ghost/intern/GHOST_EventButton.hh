@@ -24,13 +24,16 @@ class GHOST_EventButton : public GHOST_Event {
    * \param window: The window of this event.
    * \param button: The state of the buttons were at the time of the event.
    * \param tablet: The tablet data associated with this event.
+   * \param is_touch_drag: The press starts a finger drag on a touch screen.
    */
   GHOST_EventButton(uint64_t time,
                     GHOST_TEventType type,
                     GHOST_IWindow *window,
                     GHOST_TButton button,
-                    const GHOST_TabletData &tablet)
-      : GHOST_Event(time, type, window), button_event_data_({button, tablet})
+                    const GHOST_TabletData &tablet,
+                    const bool is_touch_drag = false)
+      : GHOST_Event(time, type, window),
+        button_event_data_({button, tablet, uint8_t(is_touch_drag ? 1 : 0)})
   {
     data_ = &button_event_data_;
   }
