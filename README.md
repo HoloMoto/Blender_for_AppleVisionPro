@@ -22,8 +22,7 @@ Status
 |---|---|
 | Track | **Blender 5.0 line** (marketing `5.0.1`) |
 | Branch | **`immersive-space`** (remote `visionpro` → [HoloMoto/Blender_for_AppleVisionPro](https://github.com/HoloMoto/Blender_for_AppleVisionPro)) |
-| Latest TestFlight (Vision Pro) | **156** — Speaker audio crash fix + audible Speaker playback |
-| In progress | **157** — persistent Preferences (add-ons, themes, keymaps, all `userpref.blend` settings) across restarts |
+| Latest TestFlight (Vision Pro) | **157** — Preferences persist across restarts (add-ons, themes, keymaps, all `userpref.blend` settings) |
 | 5.3 line | Paused (`immersive-space-53`). Not shipped until it launches as reliably as 5.0 |
 
 Experimental. Usable for development and testing on device; not a release build.
@@ -66,6 +65,8 @@ Features (visionOS)
 - System keyboard for Text Editor / Python Console
 - External add-ons from `Documents/Blender/scripts/addons` (`Files` app), Install… from
   `Documents/Blender/incoming` with chunked ZIP extraction
+- Preferences are saved as soon as they change (visionOS kills apps without Blender's exit-time auto-save);
+  backup + enabled add-on list in `Documents/Blender/config/`
 - `blender_visionos` platform API (hands, capabilities); `print()` appears in the **Info** editor
 
 Documentation
