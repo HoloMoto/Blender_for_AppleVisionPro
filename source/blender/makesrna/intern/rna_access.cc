@@ -140,6 +140,10 @@ bool RNA_init_async_step(const int max_count)
     StructRNA *srna = g_rna_init_async_cursor;
     /* Same as desktop RNA_init for structs_map, but skip prop_lookup_set —
      * building CustomIDVectorSet for every struct jetsams around ~1400 on TF. */
+    /* Skip incomplete defs (null/empty identifier). Simulator smoke safety. */
+    if (srna->identifier == nullptr || srna->identifier[0] == '\0') {
+      continue;
+    }
     BLI_assert(srna->flag & STRUCT_PUBLIC_NAMESPACE);
     BLI_ghash_insert(BLENDER_RNA.structs_map, (void *)srna->identifier, srna);
     BLENDER_RNA.structs_len += 1;

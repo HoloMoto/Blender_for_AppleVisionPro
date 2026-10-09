@@ -73,6 +73,23 @@
                        b:(float)b
                        a:(float)a;
 + (void)liveMeshCommit;
++ (void)speakersBegin;
++ (void)speakersPushName:(NSString *)name
+               soundPath:(NSString *)soundPath
+                       x:(float)x
+                       y:(float)y
+                       z:(float)z
+                  volume:(float)volume
+                   pitch:(float)pitch
+             distanceMax:(float)distanceMax
+             distanceRef:(float)distanceRef
+             attenuation:(float)attenuation
+                   muted:(BOOL)muted
+                 playing:(BOOL)playing
+             seekSeconds:(double)seekSeconds;
++ (void)speakersCommit;
++ (void)updateMuseNearMeshDist:(float)dist;
++ (void)setObjectExtractActive:(BOOL)enable;
 @end
 
 bool GHOST_Vision_immersive_space_is_supported(void)
@@ -124,6 +141,56 @@ void GHOST_Vision_live_mesh_commit(void)
 {
   @autoreleasepool {
     [BlenderImmersiveBridge liveMeshCommit];
+  }
+}
+
+void GHOST_Vision_speakers_begin(void)
+{
+  @autoreleasepool {
+    [BlenderImmersiveBridge speakersBegin];
+  }
+}
+
+void GHOST_Vision_speakers_push(const char *name,
+                                const char *sound_path,
+                                const float x,
+                                const float y,
+                                const float z,
+                                const float volume,
+                                const float pitch,
+                                const float distance_max,
+                                const float distance_ref,
+                                const float attenuation,
+                                const int muted,
+                                const int playing,
+                                const double seek_seconds)
+{
+  if (name == nullptr) {
+    return;
+  }
+  @autoreleasepool {
+    NSString *n = [NSString stringWithUTF8String:name];
+    NSString *path = sound_path ? [NSString stringWithUTF8String:sound_path] : @"";
+    [BlenderImmersiveBridge speakersPushName:n
+                                   soundPath:path
+                                           x:x
+                                           y:y
+                                           z:z
+                                      volume:volume
+                                       pitch:pitch
+                                 distanceMax:distance_max
+                                 distanceRef:distance_ref
+                                 attenuation:attenuation
+                                       muted:muted ? YES : NO
+                                     playing:playing ? YES : NO
+                                 seekSeconds:seek_seconds];
+  }
+}
+
+void GHOST_Vision_speakers_commit(void)
+{
+  @autoreleasepool {
+    [BlenderImmersiveBridge speakersCommit];
   }
 }
 
@@ -210,6 +277,13 @@ void GHOST_Vision_update_hand_menu(const int mode,
                                         radius:radius
                                     brushLabel:label
                                      brushKind:brush_kind];
+  }
+}
+
+void GHOST_Vision_update_muse_near_mesh_dist(const float dist_m)
+{
+  @autoreleasepool {
+    [BlenderImmersiveBridge updateMuseNearMeshDist:dist_m];
   }
 }
 
@@ -471,6 +545,24 @@ void GHOST_Vision_live_mesh_push(const char * /*name*/,
 }
 void GHOST_Vision_live_mesh_commit(void) {}
 
+void GHOST_Vision_speakers_begin(void) {}
+void GHOST_Vision_speakers_push(const char * /*name*/,
+                                const char * /*sound_path*/,
+                                const float /*x*/,
+                                const float /*y*/,
+                                const float /*z*/,
+                                const float /*volume*/,
+                                const float /*pitch*/,
+                                const float /*distance_max*/,
+                                const float /*distance_ref*/,
+                                const float /*attenuation*/,
+                                const int /*muted*/,
+                                const int /*playing*/,
+                                const double /*seek_seconds*/)
+{
+}
+void GHOST_Vision_speakers_commit(void) {}
+
 bool GHOST_Vision_open_immersive_space(void)
 {
   return false;
@@ -544,6 +636,7 @@ void GHOST_Vision_update_anim_timeline(const int /*frame*/,
 
 void GHOST_Vision_set_use_hand_as_pen(const bool /*enable*/) {}
 void GHOST_Vision_set_object_extract_active(const bool /*enable*/) {}
+void GHOST_Vision_update_muse_near_mesh_dist(const float /*dist_m*/) {}
 
 void GHOST_Vision_set_shader_space_enabled(const bool /*enable*/) {}
 

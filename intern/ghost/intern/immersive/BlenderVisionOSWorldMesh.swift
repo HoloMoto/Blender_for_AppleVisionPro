@@ -72,6 +72,7 @@ import simd
     private weak var worldRoot: Entity?
     private var sessionTask: Task<Void, Never>?
     private var publishTask: Task<Void, Never>?
+    private var stopSessionTask: Task<Void, Never>?
     private var meshes: [UUID: MeshEntry] = [:]
     private var revision: UInt32 = 0
     private var dirty = false
@@ -95,6 +96,10 @@ import simd
       self.provider = provider
 
       sessionTask = Task { @MainActor [weak self] in
+        if let stop = self?.stopSessionTask {
+          await stop.value
+          self?.stopSessionTask = nil
+        }
         await self?.runSession(session: session, provider: provider, generation: generation)
       }
       publishTask = Task { @MainActor [weak self] in
@@ -108,12 +113,16 @@ import simd
       sessionTask = nil
       publishTask?.cancel()
       publishTask = nil
+      let oldSession = session
       session = nil
       provider = nil
       meshes.removeAll()
       dirty = false
       worldRoot = nil
       BLENDER_VISIONOS_world_mesh_publish(0, nil, 0, nil, 0, 0)
+      if let oldSession {
+        stopSessionTask = Task { await oldSession.stop() }
+      }
     }
 
     private func logUnavailableOnce(_ message: String) {

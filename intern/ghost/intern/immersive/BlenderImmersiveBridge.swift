@@ -77,6 +77,14 @@ public final class BlenderImmersiveBridge: NSObject {
     #endif
   }
 
+  @objc public static func updateMuseNearMeshDist(_ dist: Float) {
+    #if os(visionOS)
+      DispatchQueue.main.async {
+        BlenderImmersiveState.shared.updateMuseNearMeshDist(dist)
+      }
+    #endif
+  }
+
   @objc(updateBones:count:)
   public static func updateBones(_ packed: [NSNumber]?, count: Int32) {
     #if os(visionOS)
@@ -337,6 +345,74 @@ public final class BlenderImmersiveBridge: NSObject {
   @objc public static func liveMeshCommit() {
     #if os(visionOS)
       let apply = { BlenderImmersiveState.shared.liveMeshCommit() }
+      if Thread.isMainThread {
+        apply()
+      }
+      else {
+        DispatchQueue.main.sync(execute: apply)
+      }
+    #endif
+  }
+
+  @objc public static func speakersBegin() {
+    #if os(visionOS)
+      let apply = { BlenderImmersiveState.shared.speakersBegin() }
+      if Thread.isMainThread {
+        apply()
+      }
+      else {
+        DispatchQueue.main.sync(execute: apply)
+      }
+    #endif
+  }
+
+  @objc(
+    speakersPushName:soundPath:x:y:z:volume:pitch:distanceMax:distanceRef:attenuation:muted:playing:seekSeconds:
+  )
+  public static func speakersPushName(
+    _ name: String?,
+    soundPath: String?,
+    x: Float,
+    y: Float,
+    z: Float,
+    volume: Float,
+    pitch: Float,
+    distanceMax: Float,
+    distanceRef: Float,
+    attenuation: Float,
+    muted: Bool,
+    playing: Bool,
+    seekSeconds: Double
+  ) {
+    #if os(visionOS)
+      let apply = {
+        BlenderImmersiveState.shared.speakersPushName(
+          name,
+          soundPath: soundPath,
+          x: x,
+          y: y,
+          z: z,
+          volume: volume,
+          pitch: pitch,
+          distanceMax: distanceMax,
+          distanceRef: distanceRef,
+          attenuation: attenuation,
+          muted: muted,
+          playing: playing,
+          seekSeconds: seekSeconds)
+      }
+      if Thread.isMainThread {
+        apply()
+      }
+      else {
+        DispatchQueue.main.sync(execute: apply)
+      }
+    #endif
+  }
+
+  @objc public static func speakersCommit() {
+    #if os(visionOS)
+      let apply = { BlenderImmersiveState.shared.speakersCommit() }
       if Thread.isMainThread {
         apply()
       }

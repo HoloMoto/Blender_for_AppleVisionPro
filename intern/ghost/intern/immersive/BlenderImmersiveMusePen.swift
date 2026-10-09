@@ -60,6 +60,8 @@ import UIKit
     private var knockTapCount = 0
     private var knockDeadline: Date?
     private let knockWindowSeconds: TimeInterval = 0.35
+    /** Latest Muse tip in Blender world meters (for pie placement). */
+    private var lastTipBlender = SIMD3<Float>.zero
 
     private enum SessionLifecycle {
       case idle
@@ -413,13 +415,37 @@ import UIKit
       tipPressure = outP
       logTipTransitionIfNeeded(pressed: drawDown, pressure: tipPressure, source: source)
 
-      /* Rising edge of primary (select) → accumulate knocks (sculpt brush shortcuts). */
+      /* Rising edge of primary (select / 筆圧ではないボタン):
+       * - tip far from mesh → Muse brush pie menu
+       * - tip near mesh → knock shortcuts (1/2/3 taps) as before */
       if read.primDown && !lastPrimaryDown {
-        knockTapCount = min(knockTapCount + 1, 3)
-        knockDeadline = Date().addingTimeInterval(knockWindowSeconds)
-        let msg = "muse knock tap=\(knockTapCount) (window \(knockWindowSeconds)s)"
-        print("[immersive] \(msg)")
-        BlenderIOSDiagnosticLog.bootSwiftOnly(msg)
+        let near = BlenderImmersiveState.shared.museNearMeshDist
+        let radius = max(BlenderImmersiveState.shared.handMenuRadius, 0.05)
+        let farGate = max(0.12, radius * 2.0)
+        let far = !near.isFinite || near >= farGate
+        let mode = BlenderImmersiveState.shared.handMenuMode
+        if far && (mode == 2 || mode == 3 || mode == 0) {
+          knockTapCount = 0
+          knockDeadline = nil
+          let x = self.lastTipBlender.x
+          let y = self.lastTipBlender.y
+          let z = self.lastTipBlender.z
+          BlenderImmersiveState.shared.setMusePieVisible(true, x: x, y: y, z: z)
+          let msg = String(
+            format: "muse pie OPEN far dist=%.3f gate=%.3f mode=%d", near, farGate, mode)
+          print("[immersive] \(msg)")
+          BlenderIOSDiagnosticLog.bootSwiftOnly(msg)
+        }
+        else if BlenderImmersiveState.shared.musePieVisible {
+          BlenderImmersiveState.shared.setMusePieVisible(false, x: 0, y: 0, z: 0)
+        }
+        else {
+          knockTapCount = min(knockTapCount + 1, 3)
+          knockDeadline = Date().addingTimeInterval(knockWindowSeconds)
+          let msg = "muse knock tap=\(knockTapCount) (window \(knockWindowSeconds)s) near=\(near)"
+          print("[immersive] \(msg)")
+          BlenderIOSDiagnosticLog.bootSwiftOnly(msg)
+        }
       }
       lastPrimaryDown = read.primDown
 
@@ -517,6 +543,12 @@ import UIKit
               let world = SIMD3<Float>(m.columns.3.x, m.columns.3.y, m.columns.3.z)
               blender = self.realityKitWorldToBlender(world)
             }
+            self.lastTipBlender = blender
+            /* Keep pie anchored on the tip while open. */
+            if BlenderImmersiveState.shared.musePieVisible {
+              BlenderImmersiveState.shared.setMusePieVisible(
+                true, x: blender.x, y: blender.y, z: blender.z)
+            }
 
             /*
              * Drain nextInputState every pose tick (Apple Drawing sample).
@@ -538,10 +570,21 @@ import UIKit
             let primP = self.primaryPressureByStylus[key] ?? 0
             let secondary = self.secondaryPressedByStylus[key] ?? false
             let secP = self.secondaryPressureByStylus[key] ?? 0
-            /* Object Mode is view-only — ignore tip / middle-button draw. */
-            let viewOnly = BlenderImmersiveState.shared.handMenuMode == 0
-            let drawDown = viewOnly ? false : self.isTipDown
-            let drawPressure = viewOnly ? Float(0) : self.tipPressure
+            /* Object Mode = Immersive view-only. Prefer sticky handMenuMode, but if
+             * C++ already mirrored Blender Sculpt/Edit into mode≠0, tip must fire.
+             * (TF-153 Live Mesh MainActor storms left mode publish lagging → Muse mute.) */
+            let menuMode = BlenderImmersiveState.shared.handMenuMode
+            let viewOnly = menuMode == 0
+            /* Use latest sensor snapshot each tick — do not rely solely on isTipDown
+             * which can lag one handler frame behind tip contact. */
+            let rawDraw = tipSensor || secondary || self.isTipDown
+            let drawDown = viewOnly ? false : rawDraw
+            let drawPressure: Float = {
+              if viewOnly { return 0 }
+              if secP > 0.001 { return secP }
+              if tipSensorP > 0.001 { return tipSensorP }
+              return self.tipPressure
+            }()
 
             self.updateTipVisual(on: anchor, tipDown: drawDown, rawPressure: drawPressure)
             if ticks % 6 == 0 {

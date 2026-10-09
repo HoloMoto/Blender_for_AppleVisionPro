@@ -38,6 +38,23 @@ void GHOST_Vision_live_mesh_push(const char *name,
                                  float a);
 void GHOST_Vision_live_mesh_commit(void);
 
+/** Speaker objects → RealityKit SpatialAudio (AUDASPACE off on visionOS). */
+void GHOST_Vision_speakers_begin(void);
+void GHOST_Vision_speakers_push(const char *name,
+                                const char *sound_path,
+                                float x,
+                                float y,
+                                float z,
+                                float volume,
+                                float pitch,
+                                float distance_max,
+                                float distance_ref,
+                                float attenuation,
+                                int muted,
+                                int playing,
+                                double seek_seconds);
+void GHOST_Vision_speakers_commit(void);
+
 /** Request opening the Immersive Space. Returns false if unavailable. */
 bool GHOST_Vision_open_immersive_space(void);
 
@@ -109,6 +126,9 @@ void GHOST_Vision_update_anim_timeline(int frame,
 /** Use right-hand pinch instead of Muse stylus. */
 void GHOST_Vision_set_use_hand_as_pen(bool enable);
 void GHOST_Vision_set_object_extract_active(bool enable);
+
+/** Muse tip → nearest mesh distance (meters) for pie-menu gating. */
+void GHOST_Vision_update_muse_near_mesh_dist(float dist_m);
 
 /** Toggle spatial shader-node overlay visibility. */
 void GHOST_Vision_set_shader_space_enabled(bool enable);

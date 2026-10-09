@@ -92,12 +92,16 @@ else()
       set(CROSS_COMPILE_FLAGS "--host=aarch64-apple-darwin20.0.0")
 
       # Disabling extra functionality!
+      # iOS / iOS Simulator SDKs may advertise dup3/pipe2 in headers while the
+      # declarations are unavailable under the deployment target (breaks posixmodule.c).
       set(CROSS_COMPILE_FUNC_CONFIGS
         && export enable_ipv6=no &&
         export ac_cv_file__dev_ptmx=no  &&
         export ac_cv_file__dev_ptc=no &&
         # system() calls unsupported on iOS.
         export ac_cv_func_system=no &&
+        export ac_cv_func_dup3=no &&
+        export ac_cv_func_pipe2=no &&
         # TODO: Ensure paths are correct, pointing to build system tools.
         export ac_cv_prog_READELF=""  &&
         # Disable nis module
@@ -186,20 +190,10 @@ else()
   # and fix the order of `-ldl` flags for SSL to avoid link errors.
   if(APPLE)
     if(WITH_APPLE_CROSSPLATFORM)
-      if(APPLE_TARGET_VISIONOS)
-        set(PYTHON_PATCH ${PATCH_CMD} --verbose -p1 -d
-          ${BUILD_DIR}/python/src/external_python <
-          ${PATCH_DIR}/python_ios.diff &&
-          ${PATCH_CMD} --verbose -p1 -d
-          ${BUILD_DIR}/python/src/external_python <
-          ${PATCH_DIR}/python_visionos.diff
-        )
-      else()
-        set(PYTHON_PATCH ${PATCH_CMD} --verbose -p1 -d 
-          ${BUILD_DIR}/python/src/external_python < 
-          ${PATCH_DIR}/python_ios.diff
-        )
-      endif()
+      set(PYTHON_PATCH ${PATCH_CMD} --verbose -p1 -d 
+        ${BUILD_DIR}/python/src/external_python < 
+        ${PATCH_DIR}/python_ios.diff
+      )
     else()
       set(PYTHON_PATCH ${PATCH_CMD} --verbose -p1 -d 
         ${BUILD_DIR}/python/src/external_python < 
@@ -226,6 +220,25 @@ else()
     )
   endif()
 
+  if(WITH_APPLE_CROSSPLATFORM)
+    # Parallel make trips on circular libmpdec rules under Apple cross-builds.
+    # Pre-build libmpdec objects via a small shell script before `make`.
+    set(PYTHON_MAKE_JOBS 1)
+    set(PYTHON_BUILD_COMMAND
+      ${CMAKE_COMMAND} -E env bash
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/python_cross_build.sh
+        ${BUILD_DIR}/python/src/external_python
+        ${PYTHON_MAKE_JOBS}
+    )
+  else()
+    set(PYTHON_MAKE_JOBS ${MAKE_THREADS})
+    set(PYTHON_BUILD_COMMAND
+      ${PYTHON_CONFIGURE_ENV} &&
+      cd ${BUILD_DIR}/python/src/external_python/ &&
+      make -j${PYTHON_MAKE_JOBS}
+    )
+  endif()
+
   ExternalProject_Add(external_python
     URL file://${PACKAGE_DIR}/${PYTHON_FILE}
     DOWNLOAD_DIR ${DOWNLOAD_DIR}
@@ -237,9 +250,7 @@ else()
       cd ${BUILD_DIR}/python/src/external_python/ && 
       ${CONFIGURE_COMMAND} --prefix=${LIBDIR}/python ${PYTHON_CONFIGURE_EXTRA_ARGS} ${CROSS_COMPILE_FLAGS}
     
-    BUILD_COMMAND ${PYTHON_CONFIGURE_ENV} && 
-      cd ${BUILD_DIR}/python/src/external_python/ && 
-      make -j${MAKE_THREADS}
+    BUILD_COMMAND ${PYTHON_CONFIGURE_ENV} && ${PYTHON_BUILD_COMMAND}
     
     INSTALL_COMMAND ${PYTHON_CONFIGURE_ENV} && 
       cd ${BUILD_DIR}/python/src/external_python/ && 

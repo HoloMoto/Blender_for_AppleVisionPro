@@ -6,41 +6,75 @@ linking to external resources instead of including content in-line.
 Blender for Apple Vision Pro
 ============================
 
-Unofficial port of [Blender](https://www.blender.org) for **visionOS**, **iOS**, and **iPadOS**.
+Unofficial port of [Blender](https://www.blender.org) **5.0** for **visionOS** (Apple Vision Pro),
+with an **iPadOS spectator** companion.
 
 This repository tracks HoloMoto's Apple-platform work on top of upstream Blender source.
 It is **not** affiliated with or maintained by the Blender Foundation.
 
+Research context: how a full desktop DCC changes the creative environment when it runs
+natively in spatial computing (evaluated with professional sculptors).
+
 Status
 ------
 
+| | |
+|---|---|
+| Track | **Blender 5.0 line** (marketing `5.0.1`) |
+| Branch | **`immersive-space`** (remote `visionpro` → [HoloMoto/Blender_for_AppleVisionPro](https://github.com/HoloMoto/Blender_for_AppleVisionPro)) |
+| Latest TestFlight (Vision Pro) | **156** — Speaker audio crash fix + audible Speaker playback |
+| In progress | **157** — persistent Preferences (add-ons, themes, keymaps, all `userpref.blend` settings) across restarts |
+| 5.3 line | Paused (`immersive-space-53`). Not shipped until it launches as reliably as 5.0 |
+
 Experimental. Usable for development and testing on device; not a release build.
-
-Primary branch for Vision Pro Immersive work: **`immersive-space`**
-(remote `visionpro` → [HoloMoto/Blender_for_AppleVisionPro](https://github.com/HoloMoto/Blender_for_AppleVisionPro)).
-
-Current TestFlight build track: **90+** (visionOS Immersive Space host).
 
 Demo on Vision Pro
 ------------------
 
-Latest on-device behavior (visionOS):
-
 [![Vision Pro demo](https://img.youtube.com/vi/7AkiuEGJ1lk/hqdefault.jpg)](https://youtu.be/7AkiuEGJ1lk)
+
+Features (visionOS)
+-------------------
+
+**Immersive Space (RealityKit)**
+
+- Scene mirror into an Immersive Space (USDZ) with object visibility honoring `hide_viewport` / `hide_render`
+- **Live Mesh Bridge**: depsgraph-evaluated meshes streamed directly to RealityKit `MeshResource`
+  (USD as fallback); Sculpt / Edit updates follow while the pen tip is down
+- Timeline playback drives Immersive refresh (animation via USD keeps materials and normals)
+- World Mesh (scene reconstruction) as tiled, session-accumulated objects; Sample Y / Hand Pickup physics
+
+**Input**
+
+- **Logitech Muse** spatial pen: pressure sculpting, near-mesh brush switching,
+  far-from-mesh secondary button opens a **brush pie menu**
+- Hand Menu (shown only when the palm faces the user), hand tracking API for add-ons
+
+**Audio**
+
+- Speaker objects play through `AVAudioEngine` (Blender's Audaspace is unavailable on visionOS)
+  with distance falloff; Ogg Vorbis is converted to PCM WAV on device (`stb_vorbis`)
+
+**Spectator (iPad) / MRC**
+
+- Origin alignment in Vision Pro, then mixed-reality capture stream to the iPad app over TCP
+  (UDP beacon discovery + manual IP entry), RealityMixer-style compositing
+
+**Python & add-ons**
+
+- In-app `pip install` (pure-Python packages) from the Python Console / Text Editor ▶
+- System keyboard for Text Editor / Python Console
+- External add-ons from `Documents/Blender/scripts/addons` (`Files` app), Install… from
+  `Documents/Blender/incoming` with chunked ZIP extraction
+- `blender_visionos` platform API (hands, capabilities); `print()` appears in the **Info** editor
 
 Documentation
 -------------
 
 | Doc | Contents |
 |-----|----------|
-| [docs/VISIONOS_API.md](docs/VISIONOS_API.md) | **Add-on platform API** (`blender_visionos`) — hands, capabilities, C ABI, `print`→Info |
-| [docs/IMMERSIVE_SPACE.md](docs/IMMERSIVE_SPACE.md) | Immersive Space branch behavior, Muse, Multiuser MVP, build flags |
-
-Vision OS Platform API (summary)
---------------------------------
-
-Goal: treat Vision Pro Blender as an **extensible creation host**, not a sealed app.
-Sensors and Immersive plumbing live in the host; tools are written with **`bpy` + `blender_visionos`**.
+| [docs/VISIONOS_API.md](docs/VISIONOS_API.md) | Add-on platform API (`blender_visionos`) — hands, capabilities, C ABI |
+| [docs/IMMERSIVE_SPACE.md](docs/IMMERSIVE_SPACE.md) | Immersive Space behavior, Muse, Multiuser MVP, build flags |
 
 ```python
 import blender_visionos as vision
@@ -52,217 +86,101 @@ if vision.available():
         print(snap.right.index_tip, snap.right.pinch)
 ```
 
-- **Live joints (API v1):** wrist, palm, thumb tip, index tip + pinch  
-- **Placeholder (copy palm until SDK grows):** middle / ring / little tips  
-- **Stdout:** on-device `print()` appears in the **Info** editor (no system console)  
-- **Example add-on:** Preferences → Add-ons → *VisionOS Hand Probe*  
-  (`scripts/addons_core/visionos_hand_probe.py`)
-
-Full reference: **[docs/VISIONOS_API.md](docs/VISIONOS_API.md)**.
-
-Recent platform work
---------------------
-
-- visionOS Immersive Space (RealityKit) + USDZ scene mirror
-- **`blender_visionos` platform API** (hand tracking for add-ons)
-- Spatial shading node board (opt-in; crash-hardened)
-- User preferences / add-on restore + hardened in-process pip path
-- Muse pen sculpt / hand menu / Vision Multiuser MVP
-- `print` → Info reports on visionOS
-- USD / USDZ import and export; Cycles Metal on Apple Silicon
-- iOS / iPadOS packaging (see also branch `ipad-mr` for iPad AR)
-
-Requirements
-------------
-
-- **macOS** with **Xcode** (visionOS / iOS SDK; device builds only — simulator libs are not used here)
-- **Apple Developer account** (code signing for physical devices)
-- **CMake** and **Ninja** (or Xcode generator)
-- Prebuilt Blender libraries: `lib/ios_arm64` and `lib/macos_arm64` (see Setup below — **not included in this repo**)
-- See upstream [build documentation](https://developer.blender.org/docs/handbook/building_blender/) for general Blender build concepts
-
 What is (and is not) in this repository
 ---------------------------------------
 
 This repo is a **source snapshot** of the Apple-platform port. It does **not** include:
 
-- Prebuilt dependency libraries (`lib/ios_arm64`, `lib/macos_arm64` — roughly 2 GB combined)
-- A built `Blender.app` ready to install
+- Prebuilt dependency libraries (`lib/visionos_arm64`, `lib/visionos-simulator_arm64`, `lib/macos_arm64`)
+- A built `Blender.app` / TestFlight archive
 - Personal code-signing settings (Team ID, bundle identifier)
 
-The `release/datafiles/*.blend` and `splash.png` files **are** included in this repo (they are normally Git LFS in upstream Blender). If they are missing after clone, see Setup step 3.
+Third-party sources vendored for visionOS: `extern/RealityMixerVisionPro` (MIT),
+`extern/SwiftSocket` (BSD-3-Clause), `intern/ghost/intern/immersive/stb_vorbis.c` (public domain / MIT).
 
-Cloning alone is **not** enough to run Blender on a device. You must obtain the libraries, configure, build, and deploy from Xcode.
+Building for Vision Pro
+-----------------------
 
-Setup (new Mac or second machine)
----------------------------------
+### Requirements
 
-### 1. Clone this repository
+- macOS on Apple Silicon, **Xcode** with the visionOS SDK (device + Simulator)
+- Apple Developer account (code signing)
+- CMake, Ninja, Homebrew build tools for dependencies
 
-```bash
-git clone -b ios git@github.com:HoloMoto/Blender_for_AppleVisionPro.git blender_fresh
-cd blender_fresh
-```
-
-### 2. Obtain prebuilt libraries (choose one method)
-
-**Option A — `make update` (recommended if versions match upstream)**
-
-From the cloned tree, run Blender's library checkout (requires Git LFS):
+### 1. Clone
 
 ```bash
-make update
+git clone -b immersive-space git@github.com:HoloMoto/Blender_for_AppleVisionPro.git blender_50_immersive
+cd blender_50_immersive
 ```
 
-This should populate `lib/ios_arm64` and `lib/macos_arm64` under the source root.
+`release/datafiles/*.blend` and `splash.png` are included (upstream keeps them in Git LFS).
 
-**Option B — copy from an existing build machine**
+### 2. Dependencies (`lib/`)
 
-Copy these folders from a machine that already builds this port:
-
-- `lib/ios_arm64` (~1 GB)
-- `lib/macos_arm64` (~1 GB)
-
-Place them at `blender_fresh/lib/`. A symlink is fine, for example:
+Build visionOS libraries once (several hours):
 
 ```bash
-ln -s /path/to/lib/ios_arm64 lib/ios_arm64
-ln -s /path/to/lib/macos_arm64 lib/macos_arm64
+brew install autoconf automake bison dos2unix libtool meson ninja pkg-config yasm
+export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/libtool/libexec/gnubin:/opt/homebrew/bin:$PATH"
+make deps            # macOS host tools
+make deps visionos   # → lib/visionos_arm64
 ```
 
-Library versions must match the Blender source revision in this branch.
+**Library generations must match this branch.** Device builds must link the same generation
+(OpenEXR 3.2 / OIIO 3.0 / OSD 3.6 / USD 25 / OCIO 2.4) that the app frameworks ship; mixing a newer
+generation (e.g. from the 5.3 tree) builds fine and passes the Simulator but **crashes on device**.
+Keep `lib/visionos_arm64` pointing to a single known-good generation.
 
-### 3. Obtain embedded datafiles (required for `bf_editor_datafiles`)
-
-The iOS build embeds these files via `datatoc` during compile:
-
-- `release/datafiles/startup.blend`
-- `release/datafiles/preview.blend`
-- `release/datafiles/preview_grease_pencil.blend`
-- `release/datafiles/splash.png`
-
-Upstream Blender stores them in **Git LFS**. If Xcode fails with:
-
-`Unable to open input .../release/datafiles/preview.blend`
-
-the files are missing. Fix with one of:
-
-**Option A — copy from a working build machine**
-
-```bash
-# On the machine that already builds successfully:
-scp release/datafiles/{startup.blend,preview.blend,preview_grease_pencil.blend,splash.png} \
-    other-mac:~/blender_fresh/release/datafiles/
-```
-
-**Option B — fetch from a full upstream Blender checkout**
-
-```bash
-# In a separate official blender.git clone with Git LFS installed:
-git lfs pull
-cp /path/to/blender/release/datafiles/{startup.blend,preview.blend,preview_grease_pencil.blend,splash.png} \
-   release/datafiles/
-```
-
-### 4. Build macOS host tools (first time only)
-
-iOS cross-builds need host tools (e.g. `datatoc`, `glsl_preprocess`). Build them in a separate directory:
+### 3. Host tools
 
 ```bash
 mkdir -p ../build_darwin_tools && cd ../build_darwin_tools
-cmake ../blender_fresh -DCMAKE_BUILD_TYPE=Release
-cmake --build . --target datatoc glsl_preprocess -j8
+cmake ../blender_50_immersive -DCMAKE_BUILD_TYPE=Release
+cmake --build . --target datatoc glsl_preprocess -j
 ```
 
-Note the output path, e.g. `../build_darwin_tools/bin` — you will pass it as `BLENDER_IOS_HOST_TOOLS_DIR`.
-
-An `APPLE_TARGET_DEVICE=ios` build deploys to Vision Pro in **iPad compatibility mode** and **cannot** open Immersive Space. Use a native visionOS build (below).
-
-### 5. Configure the iOS build
-
-```bash
-mkdir -p ../build_ios_fresh && cd ../build_ios_fresh
-cmake ../blender_fresh \
-  -G Xcode \
-  -DAPPLE_TARGET_DEVICE=ios \
-  -DBLENDER_IOS_DEVELOPMENT_TEAM=YOUR_10_CHAR_TEAM_ID \
-  -DBLENDER_IOS_BUNDLE_ID=com.yourdomain.blenderios \
-  -DBLENDER_IOS_HOST_TOOLS_DIR=/absolute/path/to/build_darwin_tools/bin
-```
-
-Replace `YOUR_10_CHAR_TEAM_ID` with your Apple Developer Team ID and choose a unique bundle ID.
-
-### 6. Build and deploy
-
-```bash
-cmake --build . --target blender -j8
-```
-
-Output: `build_ios_fresh/bin/Debug/Blender.app`
-
-### 5b. Configure the visionOS build (Vision Pro Immersive Space)
-
-Branch **`immersive-space`** only. Requires Xcode visionOS SDK and **`lib/visionos_arm64`**
-(visionOS-native prebuilts — do not reuse `lib/ios_arm64` dylibs).
-
-**Step 1 — Build visionOS dependencies** (first time; several hours):
-
-```bash
-# Homebrew build tools (once)
-brew install autoconf automake bison dos2unix libtool meson ninja pkg-config yasm
-export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/libtool/libexec/gnubin:/opt/homebrew/bin:$PATH"
-
-cd blender_fresh
-# macOS host tools required for cross-compiling visionOS deps
-make deps
-# visionOS libraries → lib/visionos_arm64
-make deps visionos
-```
-
-**Step 2 — Configure and build Blender:**
+### 4. Configure and build
 
 ```bash
 mkdir -p ../build_visionos && cd ../build_visionos
-cmake ../blender_fresh \
+cmake ../blender_50_immersive \
   -G Xcode \
   -DAPPLE_TARGET_DEVICE=visionos \
   -DWITH_VISIONOS_IMMERSIVE_SPACE=ON \
   -DBLENDER_IOS_DEVELOPMENT_TEAM=YOUR_10_CHAR_TEAM_ID \
   -DBLENDER_IOS_BUNDLE_ID=com.yourdomain.blendervision \
   -DBLENDER_IOS_HOST_TOOLS_DIR=/absolute/path/to/build_darwin_tools/bin
-cmake --build . --target blender -j8
+xcodebuild -project Blender.xcodeproj -scheme blender -configuration Release \
+  -destination generic/platform=visionOS -parallelizeTargets build
 ```
 
-Entry: **Window → Open Immersive Space** (exports scene to USDZ, opens RealityKit Immersive Space).
+A separate Simulator build uses `-sdk xrsimulator` and `lib/visionos-simulator_arm64`.
 
-- Open the generated Xcode project or deploy the `.app` to a **physical** Vision Pro / iPad / iPhone.
-- Remove any older Blender install on the device before testing a new build.
-- If Xcode **Run** crashes with `PointerUI` / backtrace errors, launch from the home-screen icon instead, or disable **Enable backtrace recording** in the scheme's Run options.
+### 5. Release gate (used for every TestFlight build)
 
-### 7. USD / USDZ export on device
+1. Build **both** the device archive and a separate `xrsimulator` build (device binaries cannot run in the Simulator).
+2. The bundle must contain UI assets: `icons` ≥ 100, `icons_svg` ≥ 500, `startup.blend`.
+3. `simctl install` + `simctl launch` — the process must stay alive ≥ 20 s (first launch after install
+   compiles Metal shaders; allow a warm-up launch).
+4. Smoke-test the changed feature path in the Simulator (e.g. a Speaker + timeline playback scene for audio).
+5. Treat `class method ... not found` warnings for the ObjC↔Swift bridge as build failures
+   (undeclared selectors silently corrupt `float` arguments).
 
-Exported files are written to **Files app → On My iPad / iPhone → Blender → Exports** (no system save picker).
+Entry on device: **Window → Open Immersive Space**.
 
 Values you must supply locally
 ------------------------------
 
 | Setting | Description |
 |---------|-------------|
-| `BLENDER_IOS_DEVELOPMENT_TEAM` | 10-character Team ID from Apple Developer |
-| `BLENDER_IOS_BUNDLE_ID` | Unique app ID (e.g. `com.example.blenderios`) |
-| `BLENDER_IOS_HOST_TOOLS_DIR` | Path to macOS host tools `bin` directory |
-| `lib/ios_arm64` | Not in Git — `make update` or copy from another Mac |
-| `lib/macos_arm64` | Not in Git — same as above |
-| Xcode | visionOS / iOS SDK installed (device SDK) |
+| `BLENDER_IOS_DEVELOPMENT_TEAM` | 10-character Team ID |
+| `BLENDER_IOS_BUNDLE_ID` | Unique app ID |
+| `BLENDER_IOS_HOST_TOOLS_DIR` | macOS host tools `bin` directory |
+| `lib/visionos_arm64` | Not in Git — build with `make deps visionos` |
 
-**Do not push** to the official `github.com/blender/blender` repository. This fork is published at [HoloMoto/Blender_for_AppleVisionPro](https://github.com/HoloMoto/Blender_for_AppleVisionPro) only.
-
-Build (overview)
-----------------
-
-1. Complete **Setup** above (libraries + host tools + CMake configure).
-2. Build the `blender` target for `iphoneos`.
-3. Deploy `Blender.app` to a physical device from Xcode.
+**Do not push** to the official `github.com/blender/blender` repository. This fork is published at
+[HoloMoto/Blender_for_AppleVisionPro](https://github.com/HoloMoto/Blender_for_AppleVisionPro) only.
 
 Upstream Blender
 ----------------

@@ -476,6 +476,9 @@ import simd
     @State private var handMenuPalmFacing = false
     @State private var handMenuEntityRef: Entity?
     @State private var handMenuPalmTask: Task<Void, Never>?
+    @State private var musePieVisible = BlenderImmersiveState.shared.musePieVisible
+    @State private var musePieRoot = Entity()
+    @State private var musePieConfigured = false
     @StateObject private var objectSync = BlenderImmersiveObjectSync()
     @StateObject private var boneOverlay = BlenderImmersiveBoneOverlay()
     @StateObject private var shaderOverlay = BlenderImmersiveShaderOverlay()
@@ -518,6 +521,79 @@ import simd
       handMenuConfigured = true
       handMenuEntityRef = menuEntity
       applyHandMenuPalmVisibility(to: menuEntity)
+    }
+
+    private func configureMusePieEntity(_ pieEntity: Entity) {
+      musePieRoot.name = "BlenderMusePieRoot"
+      if musePieRoot.parent == nil, let world = immersiveWorldRoot {
+        world.addChild(musePieRoot)
+      }
+      if pieEntity.parent != musePieRoot {
+        musePieRoot.addChild(pieEntity)
+      }
+      pieEntity.orientation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+      pieEntity.components.set(BillboardComponent())
+      pieEntity.position = .zero
+      pieEntity.scale = SIMD3(repeating: 0.85)
+      musePieConfigured = true
+      updateMusePiePlacement()
+    }
+
+    private func updateMusePiePlacement() {
+      guard musePieVisible else {
+        musePieRoot.isEnabled = false
+        return
+      }
+      musePieRoot.isEnabled = true
+      let b = SIMD3(
+        BlenderImmersiveState.shared.musePieX,
+        BlenderImmersiveState.shared.musePieY,
+        BlenderImmersiveState.shared.musePieZ)
+      /* Slightly toward the wearer so the pie is not buried in the tip sphere. */
+      let rk = BlenderImmersiveCoords.blenderToRealityKit(b)
+      musePieRoot.position = rk + SIMD3(0, 0.05, 0.08)
+    }
+
+    /** Split out of RealityView `update:` — keeps the type-checker from timing out. */
+    private func updateImmersiveAttachments(_ attachments: RealityViewAttachments) {
+      BlenderImmersiveState.shared.updatePlacement(
+        x: placementOffset.x, y: placementOffset.y, z: placementOffset.z)
+      if !sharedAnchor.hasWorldOrigin {
+        objectSync.updatePlacement(offset: placementOffset)
+      }
+      objectSync.updateActiveObject(
+        name: activeObjectName, blenderLocation: activeObjectLocation)
+      if !objectTransformNames.isEmpty {
+        objectSync.updateObjectTransforms(
+          names: objectTransformNames, locations: objectTransformLocations)
+      }
+      boneOverlay.update(
+        packed: bonePacked, count: boneCount, visible: handMenuMode == 4)
+      shaderOverlay.update(
+        materialName: shaderMaterialName,
+        nodePacked: shaderNodePacked,
+        nodeCount: shaderNodeCount,
+        names: shaderNodeNames,
+        typeNames: shaderTypeNames,
+        linkPacked: shaderLinkPacked,
+        linkCount: shaderLinkCount,
+        sockTypes: shaderSockTypes,
+        sockNames: shaderSockNames,
+        visible: shaderSpaceEnabled)
+      /* Attach once — re-applying orientation every frame fought Billboard and
+       * left the panel 90° off / covering the hand. */
+      if !handMenuConfigured, let menuEntity = attachments.entity(for: "handMenu") {
+        configureHandMenuEntity(menuEntity)
+      }
+      else if let menuEntity = attachments.entity(for: "handMenu") {
+        applyHandMenuPalmVisibility(to: menuEntity)
+      }
+      if !musePieConfigured, let pieEntity = attachments.entity(for: "musePie") {
+        configureMusePieEntity(pieEntity)
+      }
+      else {
+        updateMusePiePlacement()
+      }
     }
 
     /**
@@ -601,47 +677,21 @@ import simd
           if let menuEntity = attachments.entity(for: "handMenu") {
             configureHandMenuEntity(menuEntity)
           }
+          if let pieEntity = attachments.entity(for: "musePie") {
+            configureMusePieEntity(pieEntity)
+          }
           await sharedAnchor.start()
           await requestLoadModel(worldRoot: worldRoot)
       } update: { _, attachments in
-          BlenderImmersiveState.shared.updatePlacement(
-            x: placementOffset.x, y: placementOffset.y, z: placementOffset.z)
-          /* When WorldAnchor owns the root, skip free placement offsets. */
-          if !sharedAnchor.hasWorldOrigin {
-            objectSync.updatePlacement(offset: placementOffset)
-          }
-          objectSync.updateActiveObject(
-            name: activeObjectName, blenderLocation: activeObjectLocation)
-          if !objectTransformNames.isEmpty {
-            objectSync.updateObjectTransforms(
-              names: objectTransformNames, locations: objectTransformLocations)
-          }
-          boneOverlay.update(
-            packed: bonePacked, count: boneCount, visible: handMenuMode == 4)
-          shaderOverlay.update(
-            materialName: shaderMaterialName,
-            nodePacked: shaderNodePacked,
-            nodeCount: shaderNodeCount,
-            names: shaderNodeNames,
-            typeNames: shaderTypeNames,
-            linkPacked: shaderLinkPacked,
-            linkCount: shaderLinkCount,
-            sockTypes: shaderSockTypes,
-            sockNames: shaderSockNames,
-            visible: shaderSpaceEnabled)
-          /* Attach once — re-applying orientation every frame fought Billboard and
-           * left the panel 90° off / covering the hand. */
-          if !handMenuConfigured, let menuEntity = attachments.entity(for: "handMenu") {
-            configureHandMenuEntity(menuEntity)
-          }
-          else if let menuEntity = attachments.entity(for: "handMenu") {
-            applyHandMenuPalmVisibility(to: menuEntity)
-          }
+          updateImmersiveAttachments(attachments)
       } attachments: {
         Attachment(id: "handMenu") {
           BlenderImmersiveHandMenuPanel(
             mode: $handMenuMode,
             radius: $handMenuRadius)
+        }
+        Attachment(id: "musePie") {
+          BlenderImmersiveMusePieMenu(visible: $musePieVisible)
         }
       }
       /* Stable id: do NOT include modelRevision — remaking the RealityView on
@@ -705,13 +755,17 @@ import simd
             BlenderImmersiveLiveMeshBuilder.clear(from: worldRoot)
             return
           }
-          let liveRoot = await BlenderImmersiveLiveMeshBuilder.apply(
-            payloads: payloads, to: worldRoot)
+          guard
+            let liveRoot = await BlenderImmersiveLiveMeshBuilder.apply(
+              payloads: payloads, to: worldRoot)
+          else {
+            return  /* superseded by a newer sculpt frame */
+          }
           objectSync.configure(
             worldRoot: worldRoot,
             sceneRoot: liveRoot,
             placementOffset: placementOffset,
-            generateCollisions: true)
+            generateCollisions: false)
           BlenderImmersiveBloom.apply(worldRoot: worldRoot, sceneRoot: liveRoot)
         }
       }
@@ -743,6 +797,10 @@ import simd
         handMenuRadius = BlenderImmersiveState.shared.handMenuRadius
         handMenuBrushLabel = BlenderImmersiveState.shared.handMenuBrushLabel
         handMenuDyntopo = BlenderImmersiveState.shared.handMenuDyntopo
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveMusePieChanged)) { _ in
+        musePieVisible = BlenderImmersiveState.shared.musePieVisible
+        updateMusePiePlacement()
       }
       .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveBonesChanged)) { _ in
         bonePacked = BlenderImmersiveState.shared.bonePacked

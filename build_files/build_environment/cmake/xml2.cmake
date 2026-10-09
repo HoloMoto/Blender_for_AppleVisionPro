@@ -13,11 +13,11 @@ set(XML2_EXTRA_ARGS
 )
 
 if(WITH_APPLE_CROSSPLATFORM)
-  # Patch to remove use of getEntropy()
-  set(APPLE_CROSSPLATFORM_PATCH_CMD 
-    ${PATCH_CMD} --verbose -p 1 -N -d 
-    ${BUILD_DIR}/xml2/src/external_xml2 < 
-    ${PATCH_DIR}/xml2_ios.diff
+  # Patch to remove use of getEntropy(). `-N` + `|| true` so reconfigure after a
+  # partially-applied tree does not fail the ExternalProject patch step.
+  set(APPLE_CROSSPLATFORM_PATCH_CMD
+    ${CMAKE_COMMAND} -E env bash -c
+    "${PATCH_CMD} --verbose -p 1 -N -d ${BUILD_DIR}/xml2/src/external_xml2 < ${PATCH_DIR}/xml2_ios.diff || true"
   )
 else()
   set(APPLE_CROSSPLATFORM_PATCH_CMD)

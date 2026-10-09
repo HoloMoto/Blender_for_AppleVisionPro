@@ -20,12 +20,18 @@ public extension Notification.Name {
     "blender.immersiveModelPathChanged")
   static let blenderImmersiveLiveMeshesChanged = Notification.Name(
     "blender.immersiveLiveMeshesChanged")
+  static let blenderImmersiveSpeakersChanged = Notification.Name(
+    "blender.immersiveSpeakersChanged")
   static let blenderImmersiveActiveObjectChanged = Notification.Name(
     "blender.immersiveActiveObjectChanged")
   static let blenderImmersiveObjectTransformsChanged = Notification.Name(
     "blender.immersiveObjectTransformsChanged")
   static let blenderImmersiveHandMenuChanged = Notification.Name(
     "blender.immersiveHandMenuChanged")
+  static let blenderImmersiveMusePieChanged = Notification.Name(
+    "blender.immersiveMusePieChanged")
+  static let blenderImmersiveMuseNearDistChanged = Notification.Name(
+    "blender.immersiveMuseNearDistChanged")
   static let blenderImmersiveHandAsPenChanged = Notification.Name(
     "blender.immersiveHandAsPenChanged")
   static let blenderImmersiveHandProximityChanged = Notification.Name(
@@ -55,6 +61,9 @@ public extension Notification.Name {
   public private(set) var liveMeshes: [BlenderImmersiveLiveMeshPayload] = []
   @objc public private(set) var liveMeshRevision: UInt64 = 0
   @objc public private(set) var liveMeshActive: Bool = false
+  /** Speaker → RealityKit SpatialAudio (AUDASPACE is OFF on visionOS). */
+  public private(set) var speakers: [BlenderImmersiveSpeakerPayload] = []
+  @objc public private(set) var speakersRevision: UInt64 = 0
   @objc public private(set) var isActive: Bool = false
   @objc public private(set) var activeObjectName: String?
   @objc public private(set) var activeObjectX: Float = 0
@@ -83,6 +92,14 @@ public extension Notification.Name {
   @objc public private(set) var objectExtractActive: Bool = false
   /** Hand input trigger mode: true = proximity, false = pinch. */
   @objc public private(set) var handProximitySculpt: Bool = false
+  /** Meters from Muse tip to nearest active mesh vert (FLT_MAX if unknown). */
+  @objc public private(set) var museNearMeshDist: Float = Float.greatestFiniteMagnitude
+  /** Muse primary-button pie menu (brush picker) while tip is away from mesh. */
+  @objc public private(set) var musePieVisible: Bool = false
+  /** Pie anchor in Blender world meters (Z-up) — converted to RK for placement. */
+  @objc public private(set) var musePieX: Float = 0
+  @objc public private(set) var musePieY: Float = 0
+  @objc public private(set) var musePieZ: Float = 0
 
   /** Anim overlay: packed bones [hx,hy,hz,tx,ty,tz,selected] * N (Blender space). */
   @objc public private(set) var bonePacked: [Float] = []
@@ -142,9 +159,14 @@ public extension Notification.Name {
   @objc public func updateModelPath(_ path: String?) {
     modelPath = path
     modelRevision &+= 1
-    /* USD reload supersedes live mesh until the next live commit. */
+    /* USD reload supersedes live mesh — clear overlay state so materials stay. */
     if path != nil {
       liveMeshActive = false
+      if !liveMeshes.isEmpty {
+        liveMeshes = []
+        liveMeshRevision &+= 1
+        NotificationCenter.default.post(name: .blenderImmersiveLiveMeshesChanged, object: nil)
+      }
     }
     NotificationCenter.default.post(
       name: .blenderImmersiveModelPathChanged, object: path)
@@ -176,6 +198,57 @@ public extension Notification.Name {
     NotificationCenter.default.post(name: .blenderImmersiveLiveMeshesChanged, object: nil)
   }
 
+  /** Staging for Speaker → SpatialAudio push. */
+  private var speakerStaging: [BlenderImmersiveSpeakerPayload] = []
+
+  @objc public func speakersBegin() {
+    speakerStaging = []
+  }
+
+  @objc public func speakersPushName(
+    _ name: String?,
+    soundPath: String?,
+    x: Float,
+    y: Float,
+    z: Float,
+    volume: Float,
+    pitch: Float,
+    distanceMax: Float,
+    distanceRef: Float,
+    attenuation: Float,
+    muted: Bool,
+    playing: Bool,
+    seekSeconds: Double
+  ) {
+    guard let name, !name.isEmpty else { return }
+    speakerStaging.append(
+      BlenderImmersiveSpeakerPayload(
+        name: name,
+        soundPath: soundPath ?? "",
+        positionBlender: SIMD3(x, y, z),
+        volume: volume,
+        pitch: pitch,
+        distanceMax: distanceMax,
+        distanceRef: distanceRef,
+        attenuation: attenuation,
+        muted: muted,
+        playing: playing,
+        seekSeconds: seekSeconds))
+  }
+
+  @objc public func speakersCommit() {
+    speakers = speakerStaging
+    speakerStaging = []
+    speakersRevision &+= 1
+    #if os(visionOS) || os(iOS)
+      let payloads = speakers
+      DispatchQueue.main.async {
+        BlenderVisionOSAudio.shared.apply(payloads: payloads)
+      }
+    #endif
+    NotificationCenter.default.post(name: .blenderImmersiveSpeakersChanged, object: nil)
+  }
+
   @objc public func markActive(_ active: Bool) {
     if isActive == active { return }
     isActive = active
@@ -185,6 +258,28 @@ public extension Notification.Name {
   @objc public func applyUseHandAsPen(_ enable: Bool) {
     useHandAsPen = enable
     NotificationCenter.default.post(name: .blenderImmersiveHandAsPenChanged, object: nil)
+  }
+
+  @objc public func updateMuseNearMeshDist(_ dist: Float) {
+    let next = dist.isFinite ? dist : Float.greatestFiniteMagnitude
+    if abs(museNearMeshDist - next) < 0.002 {
+      return
+    }
+    museNearMeshDist = next
+    NotificationCenter.default.post(name: .blenderImmersiveMuseNearDistChanged, object: nil)
+  }
+
+  /** Show / hide / move the Muse brush pie (Blender-space tip). */
+  @objc public func setMusePieVisible(_ visible: Bool, x: Float, y: Float, z: Float) {
+    let changed = musePieVisible != visible || abs(musePieX - x) > 0.001 || abs(musePieY - y) > 0.001
+      || abs(musePieZ - z) > 0.001
+    musePieVisible = visible
+    musePieX = x
+    musePieY = y
+    musePieZ = z
+    if changed {
+      NotificationCenter.default.post(name: .blenderImmersiveMusePieChanged, object: nil)
+    }
   }
 
   @objc public func applyObjectExtractActive(_ enable: Bool) {

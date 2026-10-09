@@ -548,6 +548,7 @@ class TOPBAR_MT_window(Menu):
         if hasattr(bpy.ops.wm, "ios_immersive_toggle"):
             layout.separator()
             layout.operator("wm.ios_immersive_toggle", text="Open Immersive Space")
+            # Spectator align controls live only in View3D > Immersive N-panel.
 
         layout.separator()
 

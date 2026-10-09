@@ -1629,17 +1629,9 @@ class USERPREF_PT_file_paths_ios_python_packages(FilePathsPanel, Panel):
         return ("Assets" in py.replace("\\", "/")) or sys.platform == "ios"
 
     def draw(self, _context):
-        import blender_ios_pip
         layout = self.layout
         layout.use_property_split = False
-        site = str(blender_ios_pip.site_packages_dir())
-        layout.label(text="In-process pip → Documents (Mac-like deps for pure-Python add-ons)")
-        box = layout.box()
-        box.label(text=site, icon='FILE_FOLDER')
-        row = layout.row(align=True)
-        row.operator("preferences.ios_pip_install", text="Install Package…", icon='IMPORT')
-        row.operator("preferences.ios_pip_uninstall", text="Uninstall…", icon='X')
-        layout.label(text="Pure-Python OK. Native .so (numpy…) needs visionOS builds / no-deps.")
+        USERPREF_PT_addons.draw_ios_pip_box(layout)
         layout.label(text="Console: import blender_ios_pip as p; p.status()", icon='CONSOLE')
 
 
@@ -2483,6 +2475,45 @@ class USERPREF_PT_addons(AddOnPanel, Panel):
             box.label(text=line)
 
     @staticmethod
+    def draw_ios_pip_box(layout):
+        """In-process pip for visionOS / iOS (Add-ons + File Paths)."""
+        import os
+        import sys
+
+        py = os.environ.get("BLENDER_SYSTEM_PYTHON", "")
+        if not (
+            os.environ.get("BLENDER_USER_SITE_PACKAGES")
+            or ("Assets" in py.replace("\\", "/"))
+            or sys.platform == "ios"
+        ):
+            return
+
+        box = layout.box()
+        box.label(text="Python Packages (pip)", icon='IMPORT')
+        try:
+            import blender_ios_pip
+            box.label(text=str(blender_ios_pip.site_packages_dir()), icon='FILE_FOLDER')
+            pem = blender_ios_pip.ssl_cert_path()
+            if pem:
+                box.label(text="HTTPS CA bundle ready", icon='CHECKMARK')
+            else:
+                box.label(text="CA bundle missing — pip HTTPS will fail", icon='ERROR')
+        except Exception as exc:
+            box.label(text=str(exc), icon='ERROR')
+        row = box.row(align=True)
+        row.operator("preferences.ios_pip_install", text="Install Package…", icon='IMPORT')
+        row.operator("preferences.ios_pip_uninstall", text="Uninstall…", icon='X')
+        box.label(text="Pure-Python OK. Native wheels (numpy/scipy) often missing on visionOS.")
+        try:
+            import blender_ios_user_scripts as us
+
+            box.label(text="External Add-ons (Documents)", icon="FILE_FOLDER")
+            box.label(text=str(us.addons_dir()))
+            box.label(text="Install… → Documents/Blender/scripts/addons. Pure-Python only.")
+        except Exception:
+            pass
+
+    @staticmethod
     def _draw_addon_header(layout, prefs, wm):
         split = layout.split(factor=0.6)
 
@@ -2521,11 +2552,13 @@ class USERPREF_PT_addons(AddOnPanel, Panel):
 
         prefs = context.preferences
 
+        layout = self.layout
+        self.draw_ios_pip_box(layout)
+
         if self.is_extended():
             # Rely on the draw function being extended by the extensions add-on (`bl_pkg`).
             return
 
-        layout = self.layout
         wm = context.window_manager
 
         used_addon_module_name_map = {addon.module: addon for addon in prefs.addons}

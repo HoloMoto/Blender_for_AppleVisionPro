@@ -5,6 +5,9 @@
 /**
  * Live Mesh Bridge payloads + RealityKit MeshResource builder (5.0.1).
  * Verts arrive in Blender object-relative space; convert to RealityKit here.
+ *
+ * MeshResource.generate is intentionally off the MainActor — TF-153 ran it
+ * on MainActor at ~20 Hz and starved Logitech Muse pose/input sampling.
  */
 
 import Foundation
@@ -22,16 +25,51 @@ import UIKit
   }
 
   enum BlenderImmersiveLiveMeshBuilder {
+    /// Generation counter so superseded sculpt frames drop instead of queueing MainActor.
+    static var applyGeneration: UInt = 0
+
     @MainActor
     static func apply(payloads: [BlenderImmersiveLiveMeshPayload], to worldRoot: Entity) async
-      -> Entity
+      -> Entity?
     {
+      applyGeneration &+= 1
+      let generation = applyGeneration
+
+      /* Build MeshResources off the main actor so Muse / HandPen keep sampling. */
+      let built: [(String, MeshResource, SIMD4<Float>)] = await Task.detached(priority: .userInitiated) {
+        var out: [(String, MeshResource, SIMD4<Float>)] = []
+        out.reserveCapacity(payloads.count)
+        for payload in payloads {
+          if let mesh = await makeMeshResource(from: payload) {
+            out.append((payload.name, mesh, payload.color))
+          }
+        }
+        return out
+      }.value
+
+      guard generation == applyGeneration else {
+        /* A newer live-mesh commit superseded this frame — drop it. */
+        return nil
+      }
+
       let liveRoot = Entity()
       liveRoot.name = "BlenderImmersiveLive"
 
-      for payload in payloads {
-        guard let entity = await makeEntity(from: payload) else { continue }
+      for (name, mesh, colorVec) in built {
+        let color = UIColor(
+          red: CGFloat(colorVec.x),
+          green: CGFloat(colorVec.y),
+          blue: CGFloat(colorVec.z),
+          alpha: CGFloat(max(0.05, colorVec.w)))
+        let material = SimpleMaterial(color: color, isMetallic: false)
+        let entity = ModelEntity(mesh: mesh, materials: [material])
+        entity.name = name
+        /* Collisions only for grab/hit — skip mid-sculpt storms (Muse needs CPU). */
         liveRoot.addChild(entity)
+      }
+
+      guard generation == applyGeneration else {
+        return nil
       }
 
       let oldLive = worldRoot.children.filter { $0.name == "BlenderImmersiveLive" }
@@ -47,8 +85,8 @@ import UIKit
       return liveRoot
     }
 
-    @MainActor
-    private static func makeEntity(from payload: BlenderImmersiveLiveMeshPayload) async -> ModelEntity?
+    nonisolated private static func makeMeshResource(from payload: BlenderImmersiveLiveMeshPayload)
+      async -> MeshResource?
     {
       let vertFloats = payload.verts.withUnsafeBytes { buf -> [Float] in
         Array(buf.bindMemory(to: Float.self))
@@ -72,17 +110,7 @@ import UIKit
       descriptor.primitives = .triangles(indexInts)
 
       do {
-        let mesh = try await MeshResource.generate(from: [descriptor])
-        let color = UIColor(
-          red: CGFloat(payload.color.x),
-          green: CGFloat(payload.color.y),
-          blue: CGFloat(payload.color.z),
-          alpha: CGFloat(max(0.05, payload.color.w)))
-        let material = SimpleMaterial(color: color, isMetallic: false)
-        let entity = ModelEntity(mesh: mesh, materials: [material])
-        entity.name = payload.name
-        entity.generateCollisionShapes(recursive: false)
-        return entity
+        return try await MeshResource.generate(from: [descriptor])
       }
       catch {
         print("[immersive] live mesh generate failed \(payload.name): \(error)")
@@ -92,6 +120,7 @@ import UIKit
 
     @MainActor
     static func clear(from worldRoot: Entity) {
+      applyGeneration &+= 1
       for child in worldRoot.children where child.name == "BlenderImmersiveLive" {
         child.removeFromParent()
       }

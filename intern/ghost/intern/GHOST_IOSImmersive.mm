@@ -153,6 +153,58 @@ extern "C" void GHOST_IOS_immersive_live_mesh_commit(void)
   GHOST_Vision_live_mesh_commit();
 }
 
+extern "C" void GHOST_IOS_immersive_speakers_begin(void)
+{
+  /* AUDASPACE is OFF — Speaker audio must work windowed and Immersive. */
+  GHOST_Vision_speakers_begin();
+}
+
+extern "C" void GHOST_IOS_immersive_speakers_push(const char *name,
+                                                    const char *sound_path,
+                                                    const float x,
+                                                    const float y,
+                                                    const float z,
+                                                    const float volume,
+                                                    const float pitch,
+                                                    const float distance_max,
+                                                    const float distance_ref,
+                                                    const float attenuation,
+                                                    const int muted,
+                                                    const int playing,
+                                                    const double seek_seconds)
+{
+  GHOST_Vision_speakers_push(name,
+                             sound_path,
+                             x,
+                             y,
+                             z,
+                             volume,
+                             pitch,
+                             distance_max,
+                             distance_ref,
+                             attenuation,
+                             muted,
+                             playing,
+                             seek_seconds);
+}
+
+extern "C" void GHOST_IOS_immersive_speakers_commit(void)
+{
+  GHOST_Vision_speakers_commit();
+}
+
+#include "intern/immersive/immersive_audio_ogg_to_wav.h"
+
+extern "C" int GHOST_IOS_immersive_ogg_to_wav(const char *ogg_path, const char *wav_path)
+{
+  return GHOST_immersive_ogg_to_wav(ogg_path, wav_path);
+}
+
+extern "C" int GHOST_IOS_immersive_file_looks_like_ogg(const char *path)
+{
+  return GHOST_immersive_file_looks_like_ogg(path);
+}
+
 extern "C" void GHOST_IOS_immersive_update_active_object(const char *object_name,
                                                           const float blender_x,
                                                           const float blender_y,
@@ -185,6 +237,14 @@ extern "C" void GHOST_IOS_immersive_update_hand_menu(const int mode,
     return;
   }
   GHOST_Vision_update_hand_menu(mode, strength, radius, brush_label, brush_kind);
+}
+
+extern "C" void GHOST_IOS_immersive_update_muse_near_mesh_dist(const float dist_m)
+{
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return;
+  }
+  GHOST_Vision_update_muse_near_mesh_dist(dist_m);
 }
 
 extern "C" void GHOST_IOS_immersive_update_bones(const int count, const float *packed)

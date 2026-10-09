@@ -41,9 +41,22 @@ if(WITH_APPLE_CROSSPLATFORM)
   #       (Set DPXR_ENABLE_METAL_SUPPORT=ON in usd.cmake for WITH_APPLE_CROSSPLATFORM platform)
   set(WITH_HYDRA  OFF CACHE BOOL "Auto disabled due to lack of HgI/Hydra Storm for Metal on iOS" FORCE)
   set(WITH_CYCLES_OSL OFF CACHE BOOL "Support for build time compilation of OSL Shaders not supported yet on iOS" FORCE)
-  # Cycles: Metal is the only GPU backend on iOS.
-  set(WITH_CYCLES ON CACHE BOOL "Enable Cycles render engine" FORCE)
-  set(WITH_CYCLES_DEVICE_METAL ON CACHE BOOL "Cycles: Metal device (primary on iOS)" FORCE)
+  # Simulator smoke: minimal LIBDIR (no Embree/OIDN/FFmpeg). Device keeps Cycles Metal.
+  if(APPLE_TARGET_DEVICE STREQUAL "ios-simulator" OR APPLE_TARGET_DEVICE STREQUAL "visionos-simulator")
+    set(WITH_CYCLES OFF CACHE BOOL "Simulator smoke: Cycles deps not harvested yet" FORCE)
+    set(WITH_CYCLES_EMBREE OFF CACHE BOOL "Simulator smoke" FORCE)
+    set(WITH_CYCLES_PATH_GUIDING OFF CACHE BOOL "Simulator smoke" FORCE)
+    set(WITH_OPENIMAGEDENOISE OFF CACHE BOOL "Simulator smoke" FORCE)
+    set(WITH_CODEC_FFMPEG OFF CACHE BOOL "Simulator smoke" FORCE)
+    set(WITH_CODEC_SNDFILE OFF CACHE BOOL "Simulator smoke" FORCE)
+    set(WITH_MATERIALX OFF CACHE BOOL "Simulator smoke" FORCE)
+    set(WITH_HARU OFF CACHE BOOL "Simulator smoke" FORCE)
+    set(WITH_POTRACE OFF CACHE BOOL "Simulator smoke" FORCE)
+  else()
+    # Cycles: Metal is the only GPU backend on iOS / visionOS device.
+    set(WITH_CYCLES ON CACHE BOOL "Enable Cycles render engine" FORCE)
+    set(WITH_CYCLES_DEVICE_METAL ON CACHE BOOL "Cycles: Metal device (primary on iOS)" FORCE)
+  endif()
   set(WITH_CYCLES_DEVICE_CUDA OFF CACHE BOOL "NVIDIA not available on iOS" FORCE)
   set(WITH_CYCLES_DEVICE_OPTIX OFF CACHE BOOL "NVIDIA not available on iOS" FORCE)
   set(WITH_CYCLES_DEVICE_HIP OFF CACHE BOOL "AMD HIP not used on iOS" FORCE)
@@ -344,8 +357,8 @@ endif()
 
 if(WITH_USD)
   find_package(USD REQUIRED)
+  add_bundled_libraries(usd/lib)
 endif()
-add_bundled_libraries(usd/lib)
 
 if(WITH_MATERIALX)
   if(EXISTS "${LIBDIR}/materialx/lib/cmake/MaterialX")
@@ -459,12 +472,12 @@ if(WITH_APPLE_CROSSPLATFORM)
     # Do NOT link CoreServices/IOKit — they pull macOS-style XPC paths and have
     # caused instant dyld/XPC aborts on device (works under Xcode, dies in TestFlight).
     set(PLATFORM_LINKFLAGS
-      "-fexceptions -framework Foundation -framework UIKit -framework AudioToolbox -framework CoreAudio -framework Metal -framework MetalKit -framework QuartzCore -framework ImageIO -framework GameController -framework CoreGraphics -framework UniformTypeIdentifiers -framework RealityKit -framework SwiftUI"
+      "-fexceptions -framework Foundation -framework UIKit -framework AudioToolbox -framework CoreAudio -framework Metal -framework MetalKit -framework QuartzCore -framework ImageIO -framework GameController -framework CoreGraphics -framework UniformTypeIdentifiers -framework RealityKit -framework SwiftUI -framework VideoToolbox -framework CoreMedia -framework CoreVideo"
     )
   else()
     # iPad / iPhone
     set(PLATFORM_LINKFLAGS
-      "-fexceptions -framework Foundation -framework UIKit -framework AudioToolbox -framework CoreAudio -framework Metal -framework MetalKit -framework QuartzCore -framework ImageIO -framework GameController -framework CoreGraphics -framework UniformTypeIdentifiers -framework ARKit -framework SceneKit"
+      "-fexceptions -framework Foundation -framework UIKit -framework AudioToolbox -framework CoreAudio -framework Metal -framework MetalKit -framework QuartzCore -framework ImageIO -framework GameController -framework CoreGraphics -framework UniformTypeIdentifiers -framework ARKit -framework SceneKit -framework VideoToolbox -framework CoreMedia -framework CoreVideo"
     )
   endif()
   list(APPEND PLATFORM_LINKLIBS "${LIBDIR}/libb2/lib/libb2.a")
@@ -848,6 +861,10 @@ if(WITH_APPLE_CROSSPLATFORM)
       set(CMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS "iphonesimulator")
     elseif(APPLE_TARGET_DEVICE STREQUAL "visionos")
       set(CMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS "xros")
+      set(CMAKE_XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "7")
+      add_definitions(-DWITH_VISIONOS_SWIFT_MAIN)
+    elseif(APPLE_TARGET_DEVICE STREQUAL "visionos-simulator")
+      set(CMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS "xrsimulator")
       set(CMAKE_XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "7")
       add_definitions(-DWITH_VISIONOS_SWIFT_MAIN)
     endif()

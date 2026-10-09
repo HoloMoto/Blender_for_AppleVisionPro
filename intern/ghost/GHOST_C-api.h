@@ -171,6 +171,35 @@ extern void GHOST_IOS_immersive_live_mesh_push(const char *name,
                                                float b,
                                                float a);
 extern void GHOST_IOS_immersive_live_mesh_commit(void);
+
+/**
+ * Speaker → RealityKit SpatialAudio. visionOS has WITH_AUDASPACE=OFF, so Immersive
+ * must play Speaker sounds via SpatialAudio. begin → push* → commit.
+ */
+extern void GHOST_IOS_immersive_speakers_begin(void);
+extern void GHOST_IOS_immersive_speakers_push(const char *name,
+                                              const char *sound_path,
+                                              float x,
+                                              float y,
+                                              float z,
+                                              float volume,
+                                              float pitch,
+                                              float distance_max,
+                                              float distance_ref,
+                                              float attenuation,
+                                              int muted,
+                                              int playing,
+                                              double seek_seconds);
+extern void GHOST_IOS_immersive_speakers_commit(void);
+
+/**
+ * Ogg Vorbis → PCM WAV for AVAudioEngine (Apple cannot open .ogg).
+ * \return 0 on success.
+ */
+extern int GHOST_IOS_immersive_ogg_to_wav(const char *ogg_path, const char *wav_path);
+/** True when file magic is OggS. */
+extern int GHOST_IOS_immersive_file_looks_like_ogg(const char *path);
+
 /** Push the active Blender object's transform state to the RealityKit view. */
 extern void GHOST_IOS_immersive_update_active_object(
     const char *object_name, float blender_x, float blender_y, float blender_z);
@@ -189,6 +218,8 @@ extern void GHOST_IOS_immersive_update_hand_menu(int mode,
                                                  float radius,
                                                  const char *brush_label,
                                                  int brush_kind);
+/** Muse tip distance to nearest mesh vert (meters) — pie menu far-gate. */
+extern void GHOST_IOS_immersive_update_muse_near_mesh_dist(float dist_m);
 /**
  * Publish pose bones for Immersive overlay.
  * \param packed: [hx,hy,hz, tx,ty,tz, selected] * count (Blender world space).

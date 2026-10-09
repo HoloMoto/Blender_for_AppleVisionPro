@@ -31,6 +31,14 @@ else()
     endif()
   endif()
 
+  # Cross-compiling for iOS / iOS Simulator: OpenSSL's buildtest_* objects can
+  # pick up the host (macOS) triple and then fail linking against the sim SDK.
+  if(WITH_APPLE_CROSSPLATFORM)
+    set(SSL_CROSS_EXTRA no-tests no-unit-test)
+  else()
+    set(SSL_CROSS_EXTRA enable-unit-test)
+  endif()
+
   ExternalProject_Add(external_ssl
     URL file://${PACKAGE_DIR}/${SSL_FILE}
     DOWNLOAD_DIR ${DOWNLOAD_DIR}
@@ -51,7 +59,8 @@ else()
         # See #111132 & https://github.com/openssl/openssl/issues/20185 for details.
         -DOPENSSLDIR=\\"/dev/null\\"
         no-shared
-        no-idea no-mdc2 no-rc5 no-zlib no-ssl3 enable-unit-test no-ssl3-method enable-rfc3779 enable-cms
+        no-idea no-mdc2 no-rc5 no-zlib no-ssl3 no-ssl3-method enable-rfc3779 enable-cms
+        ${SSL_CROSS_EXTRA}
         --config=${CMAKE_CURRENT_SOURCE_DIR}/cmake/ssl.conf
         ${SSL_OS_COMPILER}
 

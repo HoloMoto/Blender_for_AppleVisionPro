@@ -31,6 +31,15 @@ if(BUILD_MODE STREQUAL Release)
     )
   endif()
 
+  if(WITH_APPLE_CROSSPLATFORM AND APPLE_TARGET_DEVICE MATCHES "visionos")
+    # visionOS / Simulator: CoreAudio device APIs are incomplete; use null backend for smoke.
+    set(OPENAL_EXTRA_ARGS
+      ${OPENAL_EXTRA_ARGS}
+      -DALSOFT_BACKEND_COREAUDIO=OFF
+      -DALSOFT_REQUIRE_COREAUDIO=OFF
+    )
+  endif()
+
   ExternalProject_Add(external_openal
     URL file://${PACKAGE_DIR}/${OPENAL_FILE}
     DOWNLOAD_DIR ${DOWNLOAD_DIR}

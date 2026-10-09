@@ -4,13 +4,18 @@
 
 if(WITH_APPLE_CROSSPLATFORM)
   set(BROTLI_EXTRA_ARGS
-  -DWITH_APPLE_CROSSPLATFORM=YES
-  -DBROTLI_EXECUTABLE:string=${CMAKE_DEPS_CROSSCOMPILE_BUILDDIR}/deps_arm64/Release/brotli/bin/brotli
+    -DWITH_APPLE_CROSSPLATFORM=YES
+    -DBROTLI_DISABLE_TESTS=ON
+    -DBROTLI_EXECUTABLE:string=${CMAKE_DEPS_CROSSCOMPILE_BUILDDIR}/deps_arm64/Release/brotli/bin/brotli
   )
-  set(PATCH PATCH_COMMAND ${PATCH_CMD} --verbose ${BUILD_DIR}/brotli/src/external_brotli/CMakeLists.txt ${PATCH_DIR}/brotli_ios.diff)
+  # Force re-apply of iOS patch (skip CLI install which breaks under CMAKE_SYSTEM_NAME=iOS).
+  set(BROTLI_PATCH_CMD
+    ${CMAKE_COMMAND} -E env bash -c
+    "${PATCH_CMD} --verbose -N ${BUILD_DIR}/brotli/src/external_brotli/CMakeLists.txt ${PATCH_DIR}/brotli_ios.diff || true"
+  )
 else()
   set(BROTLI_EXTRA_ARGS)
-  set(PATCH)
+  set(BROTLI_PATCH_CMD)
 endif()
 
 ExternalProject_Add(external_brotli
@@ -18,7 +23,7 @@ ExternalProject_Add(external_brotli
   DOWNLOAD_DIR ${DOWNLOAD_DIR}
   URL_HASH ${BROTLI_HASH_TYPE}=${BROTLI_HASH}
   PREFIX ${BUILD_DIR}/brotli
-  ${PATCH}
+  PATCH_COMMAND ${BROTLI_PATCH_CMD}
   CMAKE_ARGS
     -DCMAKE_INSTALL_PREFIX=${LIBDIR}/brotli
     ${DEFAULT_CMAKE_FLAGS}

@@ -78,7 +78,8 @@ import UIKit
       var id: String { rawValue }
     }
 
-    @State private var tab: StudioTab = .brush
+    /* Default to 空間 so placement/multiuser are near spectator; spectator itself is pinned above tabs. */
+    @State private var tab: StudioTab = .space
     @State private var mode = BlenderImmersiveState.shared.handMenuMode
     @State private var brushKind = BlenderImmersiveState.shared.handMenuBrushKind
     @State private var strength = BlenderImmersiveState.shared.handMenuStrength
@@ -131,6 +132,8 @@ import UIKit
             .font(.caption)
             .foregroundStyle(immersiveActive ? .green : .secondary)
         }
+
+        /* Spectator align controls live in Blender 3D Viewport > Immersive N-panel only. */
 
         Picker("", selection: $tab) {
           ForEach(StudioTab.allCases) { item in
@@ -677,6 +680,7 @@ import UIKit
         .tint(.purple)
         .disabled(!multiuserActive || multiuserHost)
       }
+
     }
 
     private func placementSlider(

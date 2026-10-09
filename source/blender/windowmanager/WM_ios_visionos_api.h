@@ -23,7 +23,7 @@ extern "C" {
 #endif
 
 /** Bump when adding fields or changing semantics of existing ones. */
-#define BLENDER_VISIONOS_API_VERSION 2
+#define BLENDER_VISIONOS_API_VERSION 3
 
 enum {
   BLENDER_VISIONOS_CAP_NONE = 0,
@@ -31,6 +31,8 @@ enum {
   BLENDER_VISIONOS_CAP_IMMERSIVE_ACTIVE = 1u << 1,
   /* RealityKit spawn / scene query / world mesh (scene reconstruction). */
   BLENDER_VISIONOS_CAP_REALITYKIT_SCENE = 1u << 2,
+  /* Immersive head / viewer pose (location + orientation). */
+  BLENDER_VISIONOS_CAP_VIEWER_POSE = 1u << 3,
 };
 
 typedef struct BLENDER_VISIONOS_Vec3 {
@@ -141,6 +143,28 @@ void BLENDER_VISIONOS_world_mesh_publish(uint32_t revision,
                                          const uint32_t *indices,
                                          uint32_t index_count,
                                          int truncated);
+
+/**
+ * Immersive viewer (HMD / head) pose in Blender world space.
+ * Location is meters Z-up; orientation_quat is Blender (w, x, y, z);
+ * matrix is column-major 4x4 (same layout as float[4][4]).
+ */
+typedef struct BLENDER_VISIONOS_ViewerSnapshot {
+  uint32_t struct_size;
+  uint32_t api_version;
+  double timestamp;
+  uint32_t immersive_active;
+  uint32_t valid;
+  float location[3];
+  float orientation_quat[4]; /* w, x, y, z */
+  float matrix[16];          /* column-major */
+} BLENDER_VISIONOS_ViewerSnapshot;
+
+/**
+ * Copy the latest Immersive viewer pose into \a out.
+ * \return 1 when a valid sample is available, 0 otherwise (out still filled).
+ */
+int BLENDER_VISIONOS_viewer_snapshot(BLENDER_VISIONOS_ViewerSnapshot *out);
 
 #ifdef __cplusplus
 }

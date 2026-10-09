@@ -37,8 +37,12 @@ import simd
 
     private var arSession = ARKitSession()
     private var worldProvider = WorldTrackingProvider()
+
+    /** Shared with MRC so it does not start a second ARKitSession (crash cause). */
+    var worldTrackingProviderForMRC: WorldTrackingProvider { worldProvider }
     private var updatesTask: Task<Void, Never>?
     private var sharingTask: Task<Void, Never>?
+    private var stopSessionTask: Task<Void, Never>?
     /** Scene container that owns either free-floating worldRoot or the WorldAnchor entity. */
     private weak var sceneContainer: Entity?
     private weak var worldRoot: Entity?
@@ -53,6 +57,10 @@ import simd
     }
 
     func start() async {
+      if let stopSessionTask {
+        await stopSessionTask.value
+        self.stopSessionTask = nil
+      }
       guard !isRunning else { return }
       do {
         let auth = await arSession.requestAuthorization(for: [.worldSensing])
@@ -93,6 +101,10 @@ import simd
       isRunning = false
       statusText = "Anchor: 停止"
       publish()
+      /* Leaving the session running after Immersive exit made the next
+       * enter fight an already-running ARKitSession (MRC lock crash class). */
+      let session = arSession
+      stopSessionTask = Task { await session.stop() }
     }
 
     /**
@@ -166,7 +178,17 @@ import simd
         publish()
         return
       }
-      let transform = root.transformMatrix(relativeTo: nil)
+      await alignAtTransform(root.transformMatrix(relativeTo: nil), label: "ここに合わせた")
+    }
+
+    /** Pin WorldAnchor at an absolute Vision Pro transform (e.g. iPad marker lock). */
+    func alignAtTransform(_ transform: simd_float4x4, label: String = "外部合わせ完了") async {
+      await start()
+      guard isRunning else {
+        statusText = "Anchor: Immersive 未準備"
+        publish()
+        return
+      }
       do {
         let anchor = WorldAnchor(originFromAnchorTransform: transform)
         try await worldProvider.addAnchor(anchor)
@@ -176,7 +198,7 @@ import simd
         anchorIDString = anchor.id.uuidString
         hasWorldOrigin = true
         pendingAdoptID = nil
-        statusText = "Anchor: ここに合わせた"
+        statusText = "Anchor: \(label)"
         publish()
       }
       catch {
@@ -248,7 +270,13 @@ import simd
     private func bindContent(to anchor: WorldAnchor) {
       guard let container = sceneContainer, let root = worldRoot else { return }
       worldAnchorEntity?.removeFromParent()
+      /* Simulator RealityKit lacks AnchorEntity(WorldAnchor); device path unchanged. */
+      #if targetEnvironment(simulator)
+      let entity = AnchorEntity()
+      entity.transform.matrix = anchor.originFromAnchorTransform
+      #else
       let entity = AnchorEntity(anchor)
+      #endif
       entity.name = anchor.id.uuidString
       container.addChild(entity)
       worldAnchorEntity = entity

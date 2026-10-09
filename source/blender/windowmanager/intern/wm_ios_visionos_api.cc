@@ -11,6 +11,8 @@
 #include "BKE_global.hh"
 #include "BKE_main.hh"
 #include "BKE_report.hh"
+#include "BLI_math_matrix.h"
+#include "BLI_math_rotation.h"
 #include "BLI_time.h"
 #include "WM_api.hh"
 
@@ -19,6 +21,10 @@
 #include <cstring>
 #include <mutex>
 #include <vector>
+
+#if defined(WITH_APPLE_CROSSPLATFORM)
+extern "C" int WM_IOS_immersive_viewer_pose_copy(float r_mat[4][4]);
+#endif
 
 #if defined(WITH_APPLE_CROSSPLATFORM)
 #  define BLENDER_VISIONOS_HOST 1
@@ -80,6 +86,12 @@ extern "C" uint64_t BLENDER_VISIONOS_capabilities(void)
   }
   if (mesh_available && immersive_active) {
     caps |= BLENDER_VISIONOS_CAP_REALITYKIT_SCENE;
+  }
+  if (immersive_active) {
+    float mat[4][4];
+    if (WM_IOS_immersive_viewer_pose_copy(mat)) {
+      caps |= BLENDER_VISIONOS_CAP_VIEWER_POSE;
+    }
   }
 #endif
   return caps;
@@ -287,5 +299,47 @@ extern "C" void BLENDER_VISIONOS_world_mesh_publish(uint32_t revision,
   (void)indices;
   (void)index_count;
   (void)truncated;
+#endif
+}
+
+extern "C" int BLENDER_VISIONOS_viewer_snapshot(BLENDER_VISIONOS_ViewerSnapshot *out)
+{
+  if (out == nullptr) {
+    return 0;
+  }
+  std::memset(out, 0, sizeof(*out));
+  out->struct_size = uint32_t(sizeof(*out));
+  out->api_version = BLENDER_VISIONOS_API_VERSION;
+  out->orientation_quat[0] = 1.0f; /* identity w */
+#if !BLENDER_VISIONOS_HOST
+  return 0;
+#else
+  {
+    std::lock_guard lock(g_visionos_mutex);
+    out->immersive_active = g_immersive_active ? 1u : 0u;
+  }
+  float mat[4][4];
+  if (!WM_IOS_immersive_viewer_pose_copy(mat)) {
+    out->timestamp = BLI_time_now_seconds();
+    return 0;
+  }
+  out->valid = 1u;
+  out->timestamp = BLI_time_now_seconds();
+  out->location[0] = mat[3][0];
+  out->location[1] = mat[3][1];
+  out->location[2] = mat[3][2];
+  float quat[4];
+  mat4_to_quat(quat, mat);
+  out->orientation_quat[0] = quat[0];
+  out->orientation_quat[1] = quat[1];
+  out->orientation_quat[2] = quat[2];
+  out->orientation_quat[3] = quat[3];
+  /* Pack column-major matching float[4][4] / Swift sample layout. */
+  for (int c = 0; c < 4; c++) {
+    for (int r = 0; r < 4; r++) {
+      out->matrix[c * 4 + r] = mat[c][r];
+    }
+  }
+  return 1;
 #endif
 }

@@ -196,6 +196,9 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
 
         intern/GHOST_ContextIOS.mm
         intern/GHOST_ContextIOS.hh
+        # Speaker Ogg→WAV (AUDASPACE off). Safe stub when Immersive is OFF.
+        intern/immersive/immersive_audio_ogg_to_wav.c
+        intern/immersive/immersive_audio_ogg_to_wav.h
       )
 
       # Vision Pro Immersive Space (Swift / RealityKit).
@@ -210,8 +213,10 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
           intern/immersive/BlenderImmersiveCoords.swift
           intern/immersive/BlenderImmersiveState.swift
           intern/immersive/BlenderImmersiveLiveMesh.swift
+          intern/immersive/BlenderImmersiveSpatialAudio.swift
           intern/immersive/BlenderImmersiveBridge.swift
           intern/immersive/BlenderImmersiveMusePen.swift
+          intern/immersive/BlenderImmersiveMusePieMenu.swift
           intern/immersive/BlenderImmersiveHandPen.swift
           intern/immersive/BlenderVisionOSPlatform.swift
           intern/immersive/BlenderVisionOSWorldMesh.swift

@@ -13,6 +13,10 @@ if(NOT WIN32)
     -DBUILD_SHARED_LIBS=OFF
     -DBUILD_CODEC=OFF
   )
+  if(WITH_APPLE_CROSSPLATFORM)
+    # XRSimulator / iPhoneSimulator sysroots often lack pthread detection for OpenJPEG.
+    set(OPENJPEG_EXTRA_ARGS ${OPENJPEG_EXTRA_ARGS} -DOPJ_USE_THREAD=OFF)
+  endif()
 
   ExternalProject_Add(external_openjpeg
     URL file://${PACKAGE_DIR}/${OPENJPEG_FILE}

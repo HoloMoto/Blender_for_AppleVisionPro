@@ -44,6 +44,10 @@
 #include "DNA_screen_types.h"
 #include "DNA_userdef_types.h"
 #include "DNA_windowmanager_types.h"
+#include "DNA_speaker_types.h"
+#include "DNA_sound_types.h"
+#include "DNA_anim_types.h"
+#include "DNA_anim_enums.h"
 
 #include "BLT_translation.hh"
 
@@ -77,6 +81,7 @@
 #include "BKE_mesh.hh"
 #include "BKE_paint.hh"
 #include "BKE_paint_types.hh"
+#include "BKE_packedFile.hh"
 #include "BKE_preview_image.hh"
 #include "BKE_report.hh"
 #include "BKE_scene.hh"
@@ -5031,6 +5036,23 @@ extern "C" void WM_IOS_immersive_viewer_pose_sample(const float *mat16)
   g_wm_ios_viewer_pose.valid = true;
 }
 
+/**
+ * Copy latest Immersive viewer pose (Blender-space 4x4) for platform API.
+ * \return 1 if a sample is available, 0 otherwise.
+ */
+extern "C" int WM_IOS_immersive_viewer_pose_copy(float r_mat[4][4])
+{
+  if (r_mat == nullptr) {
+    return 0;
+  }
+  std::lock_guard lock(g_wm_ios_viewer_pose.mutex);
+  if (!g_wm_ios_viewer_pose.valid) {
+    return 0;
+  }
+  memcpy(r_mat, g_wm_ios_viewer_pose.mat, sizeof(float) * 16);
+  return 1;
+}
+
 extern "C" void WM_IOS_immersive_camera_key_from_viewer()
 {
   std::lock_guard lock(g_wm_ios_hand_menu_cmd.mutex);
@@ -9275,10 +9297,38 @@ static bool wm_ios_immersive_reload_live_meshes(bContext *C)
   Depsgraph *depsgraph = CTX_data_ensure_evaluated_depsgraph(C);
   Scene *scene = CTX_data_scene(C);
   ViewLayer *view_layer = CTX_data_view_layer(C);
+  Main *bmain = CTX_data_main(C);
   if (depsgraph == nullptr || scene == nullptr || view_layer == nullptr) {
     return false;
   }
   BKE_view_layer_synced_ensure(scene, view_layer);
+
+  /* Flush live Sculpt DynTopo / Edit BMesh into Mesh so the bridge sees
+   * current tip positions (evaluated depsgraph alone lags mid-stroke). */
+  {
+    ListBase *bases_flush = BKE_view_layer_object_bases_get(view_layer);
+    for (Base *base = static_cast<Base *>(bases_flush->first); base != nullptr; base = base->next)
+    {
+      Object *ob = base->object;
+      if (ob == nullptr || ob->type != OB_MESH) {
+        continue;
+      }
+      if ((ob->mode & OB_MODE_EDIT) != 0 && bmain != nullptr) {
+        if (BKE_editmesh_from_object(ob) != nullptr) {
+          EDBM_mesh_load_ex(bmain, ob, false);
+        }
+      }
+      if ((ob->mode & OB_MODE_SCULPT) != 0 && BKE_object_sculpt_use_dyntopo(ob)) {
+        BKE_sculptsession_bm_to_me(ob);
+      }
+      if ((ob->mode & (OB_MODE_SCULPT | OB_MODE_EDIT | OB_MODE_VERTEX_PAINT)) != 0) {
+        DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
+        if (Mesh *me = static_cast<Mesh *>(ob->data)) {
+          DEG_id_tag_update(&me->id, ID_RECALC_GEOMETRY);
+        }
+      }
+    }
+  }
 
   constexpr int kMaxObjects = 48;
   constexpr int kMaxVertsPerObject = 120000;
@@ -9304,11 +9354,22 @@ static bool wm_ios_immersive_reload_live_meshes(bContext *C)
       break;
     }
 
+    /* Sculpt/Edit: prefer the (just-flushed) original Mesh so tip strokes show
+     * immediately. Object mode / modifiers still use evaluated mesh. */
+    const Mesh *mesh_eval = nullptr;
     Object *ob_eval = DEG_get_evaluated(depsgraph, ob);
-    if (ob_eval == nullptr) {
-      continue;
+    if ((ob->mode & (OB_MODE_SCULPT | OB_MODE_EDIT | OB_MODE_VERTEX_PAINT)) != 0) {
+      mesh_eval = static_cast<const Mesh *>(ob->data);
+      if (ob_eval == nullptr) {
+        ob_eval = ob;
+      }
     }
-    const Mesh *mesh_eval = BKE_object_get_evaluated_mesh(ob_eval);
+    else {
+      if (ob_eval == nullptr) {
+        continue;
+      }
+      mesh_eval = BKE_object_get_evaluated_mesh(ob_eval);
+    }
     if (mesh_eval == nullptr || mesh_eval->verts_num <= 0 || mesh_eval->faces_num <= 0) {
       continue;
     }
@@ -9416,20 +9477,17 @@ static bool wm_ios_immersive_reload_usdz(bContext *C, Object *ob, const char *re
     BKE_sculptsession_bm_to_me(ob);
   }
 
-  /* USD first for device stability; Live Mesh overlays when available.
-   * Preferring live-only caused 148 packaging/ABI risks to surface as "Immersive crash"
-   * and hid USD as a working fallback path. */
+  /* USD carries materials + authored normals. Live Mesh SimpleMaterial overlay
+   * balds materials and forces smooth-looking auto normals — do not overlay. */
   if (!wm_ios_immersive_export_scene(C, usdz_path, false)) {
     GHOST_IOS_diag_log("geometry refresh FAILED");
     return false;
   }
+  /* Drop any prior Live Mesh overlay so USD materials stay visible. */
+  GHOST_IOS_immersive_live_mesh_begin();
+  GHOST_IOS_immersive_live_mesh_commit();
   GHOST_IOS_immersive_reload_model(usdz_path);
   GHOST_IOS_multiuser_broadcast_usd(usdz_path);
-
-  if (wm_ios_immersive_reload_live_meshes(C)) {
-    fprintf(stderr, "[immersive] live mesh overlay ok (%s)\n", reason ? reason : "sync");
-    fflush(stderr);
-  }
 
   g_wm_ios_muse_geometry_dirty = false;
   fprintf(stderr, "[immersive] geometry refreshed (%s)\n", reason ? reason : "sync");
@@ -9438,6 +9496,180 @@ static bool wm_ios_immersive_reload_usdz(bContext *C, Object *ob, const char *re
   SNPRINTF(buf, "geometry refreshed (%s)", reason ? reason : "sync");
   GHOST_IOS_diag_log(buf);
   return true;
+}
+
+/**
+ * Push Speaker objects to AVAudioEngine spatial playback.
+ * visionOS builds have WITH_AUDASPACE=OFF so Blender's own mixer is silent —
+ * this path drives Speakers in both windowed and Immersive modes.
+ */
+static void wm_ios_immersive_publish_speakers(bContext *C)
+{
+  Scene *scene = CTX_data_scene(C);
+  ViewLayer *view_layer = CTX_data_view_layer(C);
+  Main *bmain = CTX_data_main(C);
+  if (scene == nullptr || view_layer == nullptr || bmain == nullptr) {
+    return;
+  }
+  BKE_view_layer_synced_ensure(scene, view_layer);
+
+  const bool playing = ED_screen_animation_playing(CTX_wm_manager(C)) != nullptr;
+  const float fps = float(scene->frames_per_second());
+  const int cfra = scene->r.cfra;
+  const char *blend_path = BKE_main_blendfile_path(bmain);
+
+  GHOST_IOS_immersive_speakers_begin();
+
+  constexpr int kMaxSpeakers = 24;
+  int pushed = 0;
+  ListBase *bases = BKE_view_layer_object_bases_get(view_layer);
+  for (Base *base = static_cast<Base *>(bases->first);
+       base != nullptr && pushed < kMaxSpeakers;
+       base = base->next)
+  {
+    Object *ob = base->object;
+    if (ob == nullptr || ob->type != OB_SPEAKER) {
+      continue;
+    }
+    if (!wm_ios_immersive_object_visible_for_space(base, ob)) {
+      /* Speakers: still allow if only render-disabled (viewport visible). */
+      if (ob->visibility_flag & OB_HIDE_VIEWPORT) {
+        continue;
+      }
+      if (base->flag & BASE_HIDDEN) {
+        continue;
+      }
+      if ((base->flag & BASE_ENABLED_AND_VISIBLE_IN_DEFAULT_VIEWPORT) == 0) {
+        continue;
+      }
+    }
+    Speaker *spk = static_cast<Speaker *>(ob->data);
+    if (spk == nullptr) {
+      continue;
+    }
+    bSound *sound = spk->sound;
+    if (sound == nullptr) {
+      continue;
+    }
+
+    char sound_path[FILE_MAX] = "";
+    if (sound->packedfile != nullptr) {
+      /* Unpack packed audio into the session temp so AVAudio can open it. */
+      char fname[FILE_MAXFILE];
+      BLI_path_split_file_part(sound->filepath, fname, sizeof(fname));
+      if (fname[0] == '\0') {
+        SNPRINTF(fname, "%s.bin", sound->id.name + 2);
+      }
+      BLI_path_join(sound_path, sizeof(sound_path), BKE_tempdir_session(), "immersive_spk");
+      BLI_dir_create_recursive(sound_path);
+      BLI_path_append(sound_path, sizeof(sound_path), fname);
+      if (!BLI_exists(sound_path)) {
+        if (BKE_packedfile_write_to_file(nullptr, blend_path, sound_path, sound->packedfile) !=
+            RET_OK)
+        {
+          sound_path[0] = '\0';
+        }
+      }
+    }
+    else if (sound->filepath[0] != '\0') {
+      STRNCPY(sound_path, sound->filepath);
+      BLI_path_abs(sound_path, blend_path);
+      if (!BLI_exists(sound_path)) {
+        sound_path[0] = '\0';
+      }
+    }
+    if (sound_path[0] == '\0') {
+      continue;
+    }
+
+    /* AVAudioFile cannot open Ogg — convert to PCM WAV in session temp. */
+    if (GHOST_IOS_immersive_file_looks_like_ogg(sound_path)) {
+      char wav_path[FILE_MAX];
+      BLI_path_join(wav_path, sizeof(wav_path), BKE_tempdir_session(), "immersive_spk");
+      BLI_dir_create_recursive(wav_path);
+      char base[FILE_MAXFILE];
+      BLI_path_split_file_part(sound_path, base, sizeof(base));
+      /* Replace extension with .wav */
+      char *dot = strrchr(base, '.');
+      if (dot) {
+        *dot = '\0';
+      }
+      char wav_name[FILE_MAXFILE];
+      SNPRINTF(wav_name, "%s.wav", base);
+      BLI_path_append(wav_path, sizeof(wav_path), wav_name);
+      if (!BLI_exists(wav_path) || BLI_file_size(wav_path) <= 44) {
+        const int rc = GHOST_IOS_immersive_ogg_to_wav(sound_path, wav_path);
+        if (rc != 0) {
+          fprintf(stderr, "[audio] ogg→wav failed rc=%d path=%s\n", rc, sound_path);
+          fflush(stderr);
+          continue;
+        }
+        fprintf(stderr, "[audio] ogg→wav ok %s\n", wav_path);
+        fflush(stderr);
+      }
+      STRNCPY(sound_path, wav_path);
+    }
+
+    double seek = 0.0;
+    bool strip_muted = false;
+    bool has_strip = false;
+    if (ob->adt != nullptr) {
+      LISTBASE_FOREACH (NlaTrack *, track, &ob->adt->nla_tracks) {
+        LISTBASE_FOREACH (NlaStrip *, strip, &track->strips) {
+          if (strip->type != NLASTRIP_TYPE_SOUND) {
+            continue;
+          }
+          has_strip = true;
+          strip_muted = (strip->flag & NLASTRIP_FLAG_MUTED) != 0;
+          if (fps > 0.0f) {
+            seek = double(cfra - strip->start) / double(fps);
+          }
+          break;
+        }
+        if (has_strip) {
+          break;
+        }
+      }
+    }
+    if (!has_strip && fps > 0.0f) {
+      seek = double(cfra - scene->r.sfra) / double(fps);
+    }
+    if (seek < 0.0) {
+      seek = 0.0;
+    }
+
+    const bool muted = ((spk->flag & SPK_MUTED) != 0) || strip_muted;
+    const float *loc = ob->object_to_world().location();
+    GHOST_IOS_immersive_speakers_push(ob->id.name + 2,
+                                      sound_path,
+                                      loc[0],
+                                      loc[1],
+                                      loc[2],
+                                      spk->volume,
+                                      spk->pitch > 0.0f ? spk->pitch : 1.0f,
+                                      spk->distance_max,
+                                      spk->distance_reference,
+                                      spk->attenuation,
+                                      int(muted),
+                                      int(playing && !muted),
+                                      seek);
+    pushed++;
+  }
+
+  GHOST_IOS_immersive_speakers_commit();
+  if (pushed > 0) {
+    static double last_spk_log = 0.0;
+    const double now = BLI_time_now_seconds();
+    if (now - last_spk_log >= 2.0) {
+      last_spk_log = now;
+      fprintf(stderr,
+              "[audio] speakers: %d playing=%d cfra=%d\n",
+              pushed,
+              int(playing),
+              cfra);
+      fflush(stderr);
+    }
+  }
 }
 
 static void wm_ios_immersive_sync_impl(bContext *C)
@@ -9468,6 +9700,17 @@ static void wm_ios_immersive_sync_impl(bContext *C)
               ob ? ob->id.name + 2 : "(none)",
               ob ? ob->mode : -1);
       fflush(stderr);
+    }
+  }
+
+  /* Speaker → SpatialAudio (AUDASPACE off). Throttle lightly; frame changes
+   * already re-enter this loop frequently during playback. */
+  {
+    static double last_spk = 0.0;
+    const double now_spk = BLI_time_now_seconds();
+    if (now_spk - last_spk >= 0.08) {
+      last_spk = now_spk;
+      wm_ios_immersive_publish_speakers(C);
     }
   }
 
@@ -9539,6 +9782,19 @@ static void wm_ios_immersive_sync_impl(bContext *C)
   }
 
   wm_ios_immersive_consume_muse(C, ob);
+
+  /* Muse tip → mesh distance for pie-menu far gate (primary button). */
+  {
+    float tip_w[3] = {0.0f, 0.0f, 0.0f};
+    {
+      std::lock_guard lock(g_wm_ios_immersive_muse_sample.mutex);
+      tip_w[0] = g_wm_ios_immersive_muse_sample.x;
+      tip_w[1] = g_wm_ios_immersive_muse_sample.y;
+      tip_w[2] = g_wm_ios_immersive_muse_sample.z;
+    }
+    const float dist = wm_ios_immersive_muse_nearest_vert_dist_object(ob, tip_w);
+    GHOST_IOS_immersive_update_muse_near_mesh_dist(dist);
+  }
 
   /* Detect newly added meshes (UV Sphere etc.) / active switches even in Object Mode.
    * Previously Immersive only re-exported during sculpt/edit, so new objects never appeared. */
@@ -9627,11 +9883,9 @@ static void wm_ios_immersive_sync_impl(bContext *C)
     }
   }
 
-  /* Edit/sculpt mesh changes cannot be represented by transform updates.
-   * Re-export the USDZ after a short debounce and ask RealityKit to reload.
-   * While a Muse tip stroke is active, skip export; reload soon after release.
-   * Object-mode scene adds also use this path via g_wm_ios_muse_geometry_dirty.
-   * Animation frame changes use Live Mesh only (see anim branch below). */
+  /* Edit/sculpt: Live Mesh mid-stroke (TF-153). USD tip-up / scene / anim.
+   * TF-151 stopped calling Live Mesh → Immersive looked like sculpt was dead.
+   * Anim stays USD-only (Live Mesh balds materials). */
   const bool mesh_edit_mode =
       (ob->mode & (OB_MODE_EDIT | OB_MODE_SCULPT | OB_MODE_VERTEX_PAINT)) != 0;
   const bool need_usd_visual_sync = mesh_edit_mode || scene_structure_changed ||
@@ -9644,6 +9898,7 @@ static void wm_ios_immersive_sync_impl(bContext *C)
     static uint64_t pending_update_count = 0;
     static double last_export_time = 0.0;
     static double last_anim_export_time = 0.0;
+    static double last_live_time = 0.0;
     const uint64_t update_count = depsgraph ? DEG_get_update_count(depsgraph) : 0;
 
     const double now = BLI_time_now_seconds();
@@ -9691,35 +9946,72 @@ static void wm_ios_immersive_sync_impl(bContext *C)
       GHOST_IOS_diag_log(buf);
     }
 
-    /* Animation: Live Mesh only. Cap ~20 Hz so playback doesn't USD-storm. */
+    /* Animation: USD-only. Live Mesh loses materials/normals (bald + smooth).
+     * Pace with Immersive refresh interval (floor 0.12s) to avoid USD storms. */
     if (need_anim_visual_sync && !need_usd_visual_sync) {
-      const double anim_interval = std::min(0.05, double(g_wm_ios_usd_refresh_interval));
+      const double anim_interval = std::max(0.12, double(g_wm_ios_usd_refresh_interval));
       if ((now - last_anim_export_time) >= anim_interval) {
-        if (wm_ios_immersive_reload_live_meshes(C)) {
+        if (wm_ios_immersive_reload_usdz(C, ob, "anim")) {
           last_anim_export_time = now;
+          last_export_time = now;
           g_wm_ios_anim_frame_dirty = false;
-          fprintf(stderr, "[immersive] anim live mesh refresh cfra=%d\n",
+          fprintf(stderr,
+                  "[immersive] anim USD refresh cfra=%d\n",
                   scene_for_anim ? scene_for_anim->r.cfra : -1);
           fflush(stderr);
-          GHOST_IOS_diag_log("anim: live mesh refresh");
+          GHOST_IOS_diag_log("anim: USD refresh");
         }
         else {
-          /* Nothing pushed — still clear dirty so we don't spin. */
+          /* Export failed — clear dirty so we don't spin every tick. */
           g_wm_ios_anim_frame_dirty = false;
           last_anim_export_time = now;
         }
       }
     }
 
-    /* Live Immersive refresh pacing — driven by Immersive sidebar
-     * ``usd_refresh_interval`` (default 0.35s). Tip-up stays near-immediate. */
+    /* Sculpt/Edit/VPaint: Live Mesh for Immersive tip feedback.
+     * Keep ≤~8 Hz mid-stroke — higher rates (TF-153 ~20 Hz) starved Muse MainActor
+     * sampling so the stylus looked dead. Tip-up can be snappier. */
+    const bool want_live_sculpt = mesh_edit_mode &&
+                                  (g_wm_ios_muse_geometry_dirty || g_wm_ios_muse_tip_down ||
+                                   tip_just_released || interaction_active);
+    if (want_live_sculpt) {
+      const double live_interval = (g_wm_ios_muse_tip_down || interaction_active) ? 0.12 :
+                                   tip_just_released                               ? 0.04 :
+                                                                                     0.20;
+      if ((now - last_live_time) >= live_interval) {
+        if (wm_ios_immersive_reload_live_meshes(C)) {
+          last_live_time = now;
+          /* Mid-stroke: live is enough. Keep dirty/pending for tip-up USD. */
+          if (!tip_just_released && !scene_structure_changed && !active_object_changed) {
+            /* Soft-ack so we do not spin every frame without tip motion. */
+            if (!g_wm_ios_muse_tip_down && !interaction_active) {
+              g_wm_ios_muse_geometry_dirty = false;
+              pending_update_count = 0;
+            }
+          }
+          fprintf(stderr, "[immersive] sculpt/edit live mesh refresh\n");
+          fflush(stderr);
+          GHOST_IOS_diag_log("sculpt/edit: live mesh");
+        }
+      }
+    }
+
+    /* USD: tip-up / scene / active / object-mode dirty. Skip mid-stroke sculpt
+     * (Live Mesh owns that path — full USD swap races the tip and feels dead). */
     const double interval = double(g_wm_ios_usd_refresh_interval);
     const double debounce = tip_just_released ? std::min(0.05, interval) :
                             (g_wm_ios_muse_tip_down || interaction_active) ?
                                 std::max(0.10, interval * 0.65) :
                             (scene_structure_changed || active_object_changed) ? interval :
                                                                                 std::max(interval, 0.20);
-    if (need_usd_visual_sync && pending_update_count != 0 && (now - last_export_time) >= debounce) {
+    const bool mid_stroke_sculpt = mesh_edit_mode &&
+                                   (g_wm_ios_muse_tip_down || interaction_active) &&
+                                   !tip_just_released && !scene_structure_changed &&
+                                   !active_object_changed;
+    if (need_usd_visual_sync && pending_update_count != 0 && (now - last_export_time) >= debounce &&
+        !mid_stroke_sculpt)
+    {
       /* Avoid mid-stroke full-scene swap when only structure changed. */
       if (interaction_active && !tip_just_released && !g_wm_ios_muse_geometry_dirty &&
           (scene_structure_changed || active_object_changed))
@@ -9727,10 +10019,10 @@ static void wm_ios_immersive_sync_impl(bContext *C)
         /* Wait until tip up. */
       }
       else {
-        const char *reason = tip_just_released ? "tip-up" :
-                             scene_structure_changed ? "scene" :
-                             active_object_changed   ? "active" :
-                                                       "sculpt/edit";
+        const char *reason = tip_just_released         ? "tip-up" :
+                             scene_structure_changed   ? "scene" :
+                             active_object_changed     ? "active" :
+                                                         "sculpt/edit";
         if (wm_ios_immersive_reload_usdz(C, ob, reason)) {
           last_export_time = now;
           last_update_count = depsgraph ? DEG_get_update_count(depsgraph) : last_update_count;
@@ -9797,6 +10089,13 @@ void WM_ios_immersive_sync_active_object(bContext *C)
   }
 
   if (!GHOST_IOS_immersive_mode_is_active()) {
+    /* AUDASPACE=OFF: still play Speakers via AVAudioEngine (windowed mode). */
+    static double last_spk = 0.0;
+    const double now_spk = BLI_time_now_seconds();
+    if (now_spk - last_spk >= 0.05) {
+      last_spk = now_spk;
+      wm_ios_immersive_publish_speakers(C);
+    }
     if (win_prev == nullptr) {
       CTX_wm_window_set(C, nullptr);
     }

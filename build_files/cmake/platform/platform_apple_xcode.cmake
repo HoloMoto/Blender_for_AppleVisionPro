@@ -40,12 +40,26 @@ if(WITH_APPLE_CROSSPLATFORM)
     set(APPLE_SDK_CROSSPLATFORM_NAME_LOWER "xros")
 
     set(OSX_MIN_DEPLOYMENT_TARGET 26.0)
-    set(APPLE_OS_MINVERSION_CFLAG "-mxros-version-min=${OSX_MIN_DEPLOYMENT_TARGET}")
+    set(APPLE_OS_MINVERSION_CFLAG "-mtargetos=xros${OSX_MIN_DEPLOYMENT_TARGET}")
     # Immersive Space scaffolding expects Swift RealityKit by default on visionOS.
     set(WITH_VISIONOS_IMMERSIVE_SPACE ON CACHE BOOL
         "Build Swift RealityKit Immersive Space support for visionOS" FORCE)
+  # visionOS Simulator arm64 (launch / crash smoke only — Immersive/World Sensing limited)
+  elseif(APPLE_TARGET_DEVICE STREQUAL "visionos-simulator")
+    set(CMAKE_SYSTEM_NAME "visionOS" CACHE INTERNAL "" FORCE)
+    set(APPLE_TARGET_IOS TRUE)
+    set(APPLE_TARGET_VISIONOS TRUE)
+
+    set(APPLE_SDK_CROSSPLATFORM_NAME "XRSimulator")
+    set(APPLE_SDK_CROSSPLATFORM_NAME_LOWER "xrsimulator")
+
+    set(OSX_MIN_DEPLOYMENT_TARGET 26.0)
+    set(APPLE_OS_MINVERSION_CFLAG "-mtargetos=xros${OSX_MIN_DEPLOYMENT_TARGET}-simulator")
+    # Keep Immersive stubs compiling; runtime Immersive is not available in Simulator.
+    set(WITH_VISIONOS_IMMERSIVE_SPACE ON CACHE BOOL
+        "Build Swift RealityKit Immersive Space support for visionOS" FORCE)
   else()
-    message(FATAL_ERROR "Unsupported APPLE_TARGET_DEVICE = ${APPLE_TARGET_DEVICE}. Supported: ios, ios-simulator, visionos.")
+    message(FATAL_ERROR "Unsupported APPLE_TARGET_DEVICE = ${APPLE_TARGET_DEVICE}. Supported: ios, ios-simulator, visionos, visionos-simulator.")
     set(CMAKE_SYSTEM_NAME)
     set(APPLE_TARGET_IOS FALSE)
     set(APPLE_SDK_CROSSPLATFORM_NAME)

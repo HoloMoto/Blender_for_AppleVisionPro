@@ -133,6 +133,19 @@ if [ -d "$LIB_DIR" ]; then
   find "$LIB_DIR" -maxdepth 1 -type l -name '*.dylib' -delete 2>/dev/null || true
 fi
 
+# OpenSubdiv: Blender links @rpath/libosd{GPU,CPU}.framework. If both 3.6 and 3.7
+# real dylibs were staged, wrap order can leave the *unversioned* framework as 3.6
+# while the binary needs v3_7_0 symbols (TF-124 device DYLD abort). Force 3.7.0.
+for kind in GPU CPU; do
+  unv="$FW_DIR/libosd${kind}.framework/libosd${kind}"
+  v370="$FW_DIR/libosd${kind}.3.7.0.framework/libosd${kind}.3.7.0"
+  if [ -f "$unv" ] && [ -f "$v370" ]; then
+    /bin/cp -f "$v370" "$unv"
+    /usr/bin/install_name_tool -id "@rpath/libosd${kind}.framework/libosd${kind}" "$unv" 2>/dev/null || true
+    echo "ios_appstore_frameworks: forced libosd${kind}.framework from 3.7.0"
+  fi
+done
+
 # --- OSL → LLVM/clang runtime deps (not copied into Assets/lib by default) ---
 # libosl*.framework link @rpath/libLTO|libRemarks|libclang*.framework. Missing
 # these does not break cold launch (Blender does not link OSL), but Cycles OSL
@@ -287,7 +300,10 @@ done
 if [ -d "$USD_FW" ] && [ -n "$USD_SRC" ]; then
   mkdir -p "$USD_FW/usd"
   /bin/cp -R "$USD_SRC/." "$USD_FW/usd/"
-  echo "ios_appstore_frameworks: staged USD plugInfo -> libusd_ms.framework/usd"
+  # ASC 90035: unsigned .py / codegenTemplates inside the framework seal.
+  # Runtime only needs plugInfo.json + schema usda; strip build-time templates.
+  find "$USD_FW/usd" \( -type d -name codegenTemplates -o -name '*.py' -o -name '*.cpp' -o -name '*.h' -o -name 'CMakeLists.txt' \) -exec /bin/rm -rf {} + 2>/dev/null || true
+  echo "ios_appstore_frameworks: staged USD plugInfo -> libusd_ms.framework/usd (codegen/py stripped)"
 fi
 # Remove any leftover illegal Frameworks/plugin from older packaging.
 if [ -e "$FW_DIR/plugin" ]; then

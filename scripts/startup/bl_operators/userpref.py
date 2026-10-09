@@ -719,8 +719,21 @@ class PREFERENCES_OT_addon_install(Operator):
         pyfile = self.filepath
 
         if self.target == 'DEFAULT':
-            # Don't use `bpy.utils.script_paths(path="addons")` because we may not be able to write to it.
-            path_addons = bpy.utils.user_resource('SCRIPTS', path="addons", create=True)
+            # visionOS / iOS: always install into Documents (writable + Files-visible).
+            # Don't use bundled Assets scripts — those are read-only.
+            path_addons = None
+            try:
+                import blender_ios_user_scripts as us
+
+                if us.is_apple_mobile():
+                    us.ensure_user_scripts(create=True)
+                    us.refresh()
+                    path_addons = str(us.addons_dir())
+            except Exception:
+                path_addons = None
+            if not path_addons:
+                # Don't use `bpy.utils.script_paths(path="addons")` because we may not be able to write to it.
+                path_addons = bpy.utils.user_resource('SCRIPTS', path="addons", create=True)
         else:
             paths = context.preferences.filepaths
             for script_directory in paths.script_directories:
@@ -744,12 +757,67 @@ class PREFERENCES_OT_addon_install(Operator):
         addon_path = ""
         pyfile_dir = os.path.dirname(pyfile)
         for addon_path in addon_utils.paths():
-            if os.path.samefile(pyfile_dir, addon_path):
-                self.report({'ERROR'}, rpt_("Source file is in the add-on search path: {!r}").format(addon_path))
-                return {'CANCELLED'}
+            try:
+                if (
+                    pyfile_dir
+                    and os.path.exists(pyfile_dir)
+                    and os.path.exists(addon_path)
+                    and os.path.samefile(pyfile_dir, addon_path)
+                ):
+                    self.report(
+                        {'ERROR'},
+                        rpt_("Source file is in the add-on search path: {!r}").format(addon_path),
+                    )
+                    return {'CANCELLED'}
+            except OSError:
+                continue
         del addon_path
         del pyfile_dir
         # done checking for exceptional case
+
+        # visionOS / iOS: stage + chunked / timer extract — desktop extractall jetsams
+        # on large ZIP (e.g. HarmonyKeys with multi-10MB .blend) right after file picker.
+        try:
+            import blender_ios_user_scripts as _us_ios
+            _mobile = _us_ios.is_apple_mobile()
+        except Exception:
+            _mobile = False
+
+        if _mobile:
+            try:
+                import blender_ios_addon_install as ios_inst
+
+                if zipfile.is_zipfile(pyfile):
+                    msg = ios_inst.begin_async_install(
+                        filepath=pyfile,
+                        path_addons=path_addons,
+                        overwrite=self.overwrite,
+                        enable_on_install=self.enable_on_install,
+                    )
+                    self.report({'INFO'}, msg)
+                    print(msg, flush=True)
+                    return {'FINISHED'}
+
+                stem = ios_inst.install_py_file(
+                    pyfile, path_addons, overwrite=self.overwrite,
+                )
+                bpy.utils.refresh_script_paths()
+                addon_utils.modules_refresh()
+                if self.enable_on_install:
+                    try:
+                        addon_utils.enable(stem, default_set=True, persistent=True)
+                    except Exception:
+                        traceback.print_exc()
+                msg = rpt_("Modules Installed ({:s}) from {!r} into {!r}").format(
+                    stem, pyfile, path_addons,
+                )
+                print(msg)
+                self.report({'INFO'}, msg)
+                return {'FINISHED'}
+            except Exception as exc:
+                traceback.print_exc()
+                self.report({'ERROR'}, rpt_("Add-on install failed: {}").format(exc))
+                return {'CANCELLED'}
 
         addons_old = {mod.__name__ for mod in addon_utils.modules()}
 
@@ -1337,7 +1405,8 @@ class PREFERENCES_OT_ios_pip_install(Operator):
         layout.prop(self, "package")
         layout.prop(self, "no_deps")
         layout.label(text="Installs into Documents/Blender/python/site-packages", icon='INFO')
-        layout.label(text="Console: import blender_ios_pip as p; p.status()", icon='CONSOLE')
+        layout.label(text="music21: leave No Dependencies off — native deps are skipped automatically")
+        layout.label(text="numpy/scipy/matplotlib cannot install on visionOS", icon='ERROR')
 
 
 

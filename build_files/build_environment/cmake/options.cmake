@@ -261,7 +261,11 @@ else()
       # Set Crossplatform Apple-arm64 specific cmake flags with SDKs.
       if(APPLE_TARGET_VISIONOS)
         # visionOS requires -target arm64-apple-xros*; -arch arm64 + -mxros-version-min fails on autotools.
-        set(APPLE_CROSSPLATFORM_ARCH_FLAGS "-target arm64-apple-xros${CMAKE_OSX_DEPLOYMENT_TARGET}")
+        if(APPLE_TARGET_DEVICE STREQUAL "visionos-simulator")
+          set(APPLE_CROSSPLATFORM_ARCH_FLAGS "-target arm64-apple-xros${CMAKE_OSX_DEPLOYMENT_TARGET}-simulator")
+        else()
+          set(APPLE_CROSSPLATFORM_ARCH_FLAGS "-target arm64-apple-xros${CMAKE_OSX_DEPLOYMENT_TARGET}")
+        endif()
         set(PLATFORM_CFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} ${APPLE_CROSSPLATFORM_ARCH_FLAGS} -Wno-declaration-after-statement")
         set(PLATFORM_CXXFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} ${APPLE_CROSSPLATFORM_ARCH_FLAGS} -std=c++17 -stdlib=libc++")
         set(PLATFORM_LDFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} ${APPLE_CROSSPLATFORM_ARCH_FLAGS}")

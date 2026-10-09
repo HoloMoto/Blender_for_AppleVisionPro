@@ -58,7 +58,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Blender shares Immersive sessions with nearby Vision Pro devices over the local network.</string>
+	<string>Blender streams Mixed Reality Capture to an iPad spectator on the same Wi‑Fi (TCP 13370) and shares Immersive sessions with nearby devices.</string>
 	<key>NSMainCameraUsageDescription</key>
 	<string>Blender uses the main camera for Reality Kit immersive AR and Muse accessory tracking.</string>
 	<key>NSWorldSensingUsageDescription</key>
