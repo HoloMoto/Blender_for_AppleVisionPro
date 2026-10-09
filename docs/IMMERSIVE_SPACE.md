@@ -68,7 +68,7 @@ Ultimate goal: **sculpt in Immersive Space** with bidirectional sync
 |-------|------|--------|
 | **1** | Muse as Immersive cursor (tip anchor + visual) | Done |
 | **2** | Muse tip → 2D View3D sculpt (tablet projection MVP) | Done (MVP) |
-| **3** | Immersive-native mesh hit / dab (no 2D projection) | Planned |
+| **3** | Immersive-native mesh hit / dab (no 2D projection) | Done (TF-159, spatial sculpt) |
 | **4** | Multi Vision Pro experience share (Multiuser-inspired) | Done (MVP) |
 
 ### Phase 4 — Vision Multiuser (MVP)
@@ -93,7 +93,32 @@ Requires `NSLocalNetworkUsageDescription` + Bonjour entitlement in Info.plist.
 **Not in MVP (later):** full datablock replication like Multiuser; bidirectional mesh edit merge.
 Host remains authoritative for the shared USD scene.
 
-### Phase 2 MVP (current)
+### Phase 3 — spatial sculpt (TF-159)
+
+The Muse tip (or the hand pen) drives Blender's own sculpt stroke system in 3D:
+
+- `sculpt_paint::spatial::stroke_sample()` runs `SCULPT_OT_brush_stroke` callbacks
+  (`paint_stroke_spatial_step` / `paint_stroke_spatial_end`) with a world-space override:
+  the ray is tip ± pen direction × reach, radius is in world units
+  (Hand Menu radius ÷ view scale), view normal = −pen direction.
+  Every brush asset, symmetry, auto-masking and undo (one step per stroke) work as in the
+  desktop build. Direction falls back from pen aim → viewer→tip → region view.
+- Spacing is world-space (brush spacing % × radius, ≤ 8 sub-steps per sample);
+  grab-like / anchored brushes take one step per sample.
+- Pie / knock brushes map to real assets: Draw, Clay Strips, Grab, Smooth, Inflate/Deflate
+  (Deflate = invert stroke), Mask, Crease Polish, Layer, Snake Hook, Draw Sharp, Flatten/Contrast.
+- Hand Menu **Engine** toggle keeps the previous custom deform path (`legacy`).
+- Live Mesh: per-object cache; only changed vertex ranges are sent
+  (`GHOST_IOS_immersive_live_mesh_update` → `LowLevelMesh` in-place write), full frame as fallback.
+  Sculpt meshes ≥ 150k verts skip the tip-up USD rebuild (live mesh only).
+- Near-mesh distance uses the sculpt BVH (`nearest_vertex_distance`) instead of a full scan.
+- Spatial UI: brush preview ring at the surface hit (normal + strength), two-hand hold
+  (move / rotate / scale the scene), Hand Menu **1:1 ↔ desk** scale toggle around the view
+  center, and a peace pose (index + middle extended) that turns window 1-finger drag into pan
+  (`blender_ios_hand_pose` → `set_drag_pan_override`, RealityKit joint anchors only).
+  Hold is disabled while spectator alignment is locked.
+
+### Phase 2 MVP (superseded by Phase 3 for Sculpt)
 
 Immersive Muse tip/pressure is sampled in Swift, queued via
 `WM_IOS_immersive_muse_sample`, projected into the active View3D with

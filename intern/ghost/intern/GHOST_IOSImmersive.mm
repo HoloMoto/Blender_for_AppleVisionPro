@@ -153,6 +153,71 @@ extern "C" void GHOST_IOS_immersive_live_mesh_commit(void)
   GHOST_Vision_live_mesh_commit();
 }
 
+extern "C" void GHOST_IOS_immersive_live_mesh_push_full(const char *name,
+                                                         const int vert_count,
+                                                         const float *verts_blender,
+                                                         const float *normals_blender,
+                                                         const int tri_count,
+                                                         const unsigned int *indices,
+                                                         const float r,
+                                                         const float g,
+                                                         const float b,
+                                                         const float a)
+{
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return;
+  }
+  GHOST_Vision_live_mesh_push_full(
+      name, vert_count, verts_blender, normals_blender, tri_count, indices, r, g, b, a);
+}
+
+extern "C" int GHOST_IOS_immersive_live_mesh_update(const char *name,
+                                                     const int vert_count,
+                                                     const int range_count,
+                                                     const int *ranges,
+                                                     const int packed_count,
+                                                     const float *verts_blender,
+                                                     const float *normals_blender)
+{
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return 0;
+  }
+  return GHOST_Vision_live_mesh_update(name,
+                                       vert_count,
+                                       range_count,
+                                       ranges,
+                                       packed_count,
+                                       verts_blender,
+                                       normals_blender) ?
+             1 :
+             0;
+}
+
+extern "C" void GHOST_IOS_immersive_update_brush_preview(const int visible,
+                                                          const float x,
+                                                          const float y,
+                                                          const float z,
+                                                          const float nx,
+                                                          const float ny,
+                                                          const float nz,
+                                                          const float radius,
+                                                          const float strength,
+                                                          const int active,
+                                                          const int kind)
+{
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return;
+  }
+  GHOST_Vision_update_brush_preview(
+      visible != 0, x, y, z, nx, ny, nz, radius, strength, active != 0, kind);
+}
+
+extern "C" void GHOST_IOS_immersive_debug_spatial(
+    const int action, const float a, const float b, const float c, char *r_buf, const int buf_len)
+{
+  GHOST_Vision_debug_spatial(action, a, b, c, r_buf, buf_len);
+}
+
 extern "C" void GHOST_IOS_immersive_speakers_begin(void)
 {
   /* AUDASPACE is OFF — Speaker audio must work windowed and Immersive. */

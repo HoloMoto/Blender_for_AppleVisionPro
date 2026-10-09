@@ -151,6 +151,14 @@ wmOperatorStatus paint_stroke_modal(bContext *C,
                                     const wmEvent *event,
                                     PaintStroke **stroke_p);
 wmOperatorStatus paint_stroke_exec(bContext *C, wmOperator *op, PaintStroke *stroke);
+/**
+ * Drive a stroke one sample at a time without window events (visionOS Immersive spatial input).
+ * The first call runs `StrokeTestStart`; returns false while the stroke has not started.
+ */
+bool paint_stroke_spatial_step(
+    bContext *C, wmOperator *op, PaintStroke *stroke, const float2 &mval, float pressure);
+/** Finish a stroke driven by #paint_stroke_spatial_step. Frees `stroke`. */
+void paint_stroke_spatial_end(bContext *C, wmOperator *op, PaintStroke *stroke);
 void paint_stroke_cancel(bContext *C, wmOperator *op, PaintStroke *stroke);
 bool paint_stroke_flipped(PaintStroke *stroke);
 bool paint_stroke_inverted(PaintStroke *stroke);

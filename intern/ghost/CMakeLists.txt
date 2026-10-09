@@ -221,6 +221,7 @@ elseif(APPLE AND NOT WITH_GHOST_X11)
           intern/immersive/BlenderVisionOSPlatform.swift
           intern/immersive/BlenderVisionOSWorldMesh.swift
           intern/immersive/BlenderImmersiveSpatialTracking.swift
+          intern/immersive/BlenderImmersiveSpatialHold.swift
           intern/immersive/BlenderImmersiveHandMenu.swift
           intern/immersive/BlenderImmersiveViewportPanel.swift
           intern/immersive/BlenderImmersiveShaderOverlay.swift

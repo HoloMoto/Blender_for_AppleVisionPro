@@ -48,6 +48,45 @@ void operatortypes_sculpt();
 
 void keymap_sculpt(wmKeyConfig *keyconf);
 
+/**
+ * Spatial (visionOS Immersive) strokes: drive the regular sculpt brush engine from a 3D tool
+ * position instead of window events. The stroke location comes from a ray along the tool
+ * direction through the tip, the brush radius is given in world units, and grab-type brushes
+ * follow the tip in 3D. All brushes, brush settings, symmetry and undo apply as on the desktop.
+ * The active object must be in Sculpt Mode and the context must have a 3D viewport region.
+ */
+namespace spatial {
+
+struct ToolSample {
+  /** World space tool tip. */
+  float tip[3];
+  /** World space unit direction the tool points into the surface (zero when unknown). */
+  float dir[3];
+  /** World distance searched behind and beyond the tip along `dir`. */
+  float reach;
+  /** World space brush radius. */
+  float radius;
+  float pressure;
+  /** Region coordinates for screen-space stroke features (projection of the tip). */
+  float mval[2];
+  /** #BrushStrokeMode. */
+  int stroke_mode;
+};
+
+/** Begin or continue the stroke. Returns true while the stroke is applying to the mesh. */
+bool stroke_sample(bContext *C, const ToolSample &sample);
+void stroke_end(bContext *C);
+bool stroke_active();
+/** World space surface point and normal under the tool, as the brush would see it. */
+bool cursor_sample(bContext *C, const ToolSample &sample, float r_location[3], float r_normal[3]);
+/** World space distance from `point` to the nearest sculpt vertex, or a negative value. */
+float nearest_vertex_distance(const Depsgraph &depsgraph,
+                              Object &ob,
+                              const float point[3],
+                              float max_distance);
+
+}  // namespace spatial
+
 /* `sculpt_transform.cc` */
 
 void update_modal_transform(bContext *C, Object &ob);

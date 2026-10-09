@@ -1761,6 +1761,28 @@ wmOperatorStatus paint_stroke_exec(bContext *C, wmOperator *op, PaintStroke *str
   return ok ? OPERATOR_FINISHED : OPERATOR_CANCELLED;
 }
 
+bool paint_stroke_spatial_step(
+    bContext *C, wmOperator *op, PaintStroke *stroke, const float2 &mval, const float pressure)
+{
+  if (!stroke->stroke_started) {
+    stroke->last_mouse_position = mval;
+    stroke->last_pressure = pressure;
+    stroke->stroke_started = stroke->test_start(C, op, mval);
+    if (!stroke->stroke_started) {
+      return false;
+    }
+    stroke->stroke_init = true;
+  }
+  stroke->stroke_distance += math::distance(stroke->last_mouse_position, mval);
+  paint_brush_stroke_add_step(C, op, stroke, mval, pressure);
+  return true;
+}
+
+void paint_stroke_spatial_end(bContext *C, wmOperator *op, PaintStroke *stroke)
+{
+  stroke_done(C, op, stroke);
+}
+
 void paint_stroke_cancel(bContext *C, wmOperator *op, PaintStroke *stroke)
 {
   stroke_done(C, op, stroke);

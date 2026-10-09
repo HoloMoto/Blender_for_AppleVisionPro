@@ -118,7 +118,7 @@ import simd
         publish()
         return nil
       }
-      let transform = root.transformMatrix(relativeTo: nil)
+      let transform = Self.rigid(root.transformMatrix(relativeTo: nil))
       do {
         let share = sharingAvailable
         let anchor = WorldAnchor(
@@ -178,7 +178,7 @@ import simd
         publish()
         return
       }
-      await alignAtTransform(root.transformMatrix(relativeTo: nil), label: "ここに合わせた")
+      await alignAtTransform(Self.rigid(root.transformMatrix(relativeTo: nil)), label: "ここに合わせた")
     }
 
     /** Pin WorldAnchor at an absolute Vision Pro transform (e.g. iPad marker lock). */
@@ -297,6 +297,18 @@ import simd
       container.addChild(root)
       let p = BlenderImmersiveState.shared.placementOffset
       root.position = SIMD3(p.x, p.y, -1.2 + p.z)
+    }
+
+    /** Strip spatial-hold view scale — WorldAnchor transforms must be rigid. */
+    private static func rigid(_ m: simd_float4x4) -> simd_float4x4 {
+      func unit(_ c: SIMD4<Float>) -> SIMD4<Float> {
+        let v = SIMD3<Float>(c.x, c.y, c.z)
+        let len = simd_length(v)
+        guard len > 1.0e-6 else { return c }
+        let n = v / len
+        return SIMD4<Float>(n.x, n.y, n.z, 0)
+      }
+      return simd_float4x4(unit(m.columns.0), unit(m.columns.1), unit(m.columns.2), m.columns.3)
     }
 
     private func publish() {

@@ -171,6 +171,44 @@ extern void GHOST_IOS_immersive_live_mesh_push(const char *name,
                                                float b,
                                                float a);
 extern void GHOST_IOS_immersive_live_mesh_commit(void);
+/** Live mesh with vertex normals (between begin/commit). */
+extern void GHOST_IOS_immersive_live_mesh_push_full(const char *name,
+                                                    int vert_count,
+                                                    const float *verts_blender,
+                                                    const float *normals_blender,
+                                                    int tri_count,
+                                                    const unsigned int *indices,
+                                                    float r,
+                                                    float g,
+                                                    float b,
+                                                    float a);
+/**
+ * Update vertex ranges of a live mesh in place. \a ranges holds (start, count) pairs,
+ * \a verts_blender / \a normals_blender are packed for all ranges in order.
+ * Returns 0 when the mesh must be pushed in full again.
+ */
+extern int GHOST_IOS_immersive_live_mesh_update(const char *name,
+                                                int vert_count,
+                                                int range_count,
+                                                const int *ranges,
+                                                int packed_count,
+                                                const float *verts_blender,
+                                                const float *normals_blender);
+/** Spatial brush preview ring at the pen tip (Blender coords). */
+extern void GHOST_IOS_immersive_update_brush_preview(int visible,
+                                                     float x,
+                                                     float y,
+                                                     float z,
+                                                     float nx,
+                                                     float ny,
+                                                     float nz,
+                                                     float radius,
+                                                     float strength,
+                                                     int active,
+                                                     int kind);
+/** Smoke-test hook for spatial hold / scale / brush preview (status line in \a r_buf). */
+extern void GHOST_IOS_immersive_debug_spatial(
+    int action, float a, float b, float c, char *r_buf, int buf_len);
 
 /**
  * Speaker → RealityKit SpatialAudio. visionOS has WITH_AUDASPACE=OFF, so Immersive

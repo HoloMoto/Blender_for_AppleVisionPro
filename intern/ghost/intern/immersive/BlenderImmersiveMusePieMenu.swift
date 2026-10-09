@@ -31,23 +31,31 @@ import SwiftUI
       let kind: Int
       let toolId: String
       let angleDeg: Double
+      /** Ring radius (pt): inner ring 96, outer ring interleaved at 30° offsets. */
+      let ringRadius: CGFloat
     }
 
-    /* Even ring around the tip — Blender Immersive Muse brush kinds. */
+    /* Two rings around the tip — Blender Immersive Muse brush kinds. */
     private let slices: [Slice] = [
-      .init(id: 0, title: "Inflate+", kind: 4, toolId: "builtin.brush", angleDeg: -90),
-      .init(id: 1, title: "Inflate−", kind: 5, toolId: "builtin.brush", angleDeg: -30),
-      .init(id: 2, title: "Smooth", kind: 3, toolId: "builtin.brush", angleDeg: 30),
-      .init(id: 3, title: "Grab", kind: 2, toolId: "builtin.brush", angleDeg: 90),
-      .init(id: 4, title: "Clay", kind: 1, toolId: "builtin.brush", angleDeg: 150),
-      .init(id: 5, title: "Mask", kind: 6, toolId: "builtin.brush", angleDeg: 210),
+      .init(id: 0, title: "Inflate+", kind: 4, toolId: "builtin.brush", angleDeg: -90, ringRadius: 96),
+      .init(id: 1, title: "Inflate−", kind: 5, toolId: "builtin.brush", angleDeg: -30, ringRadius: 96),
+      .init(id: 2, title: "Smooth", kind: 3, toolId: "builtin.brush", angleDeg: 30, ringRadius: 96),
+      .init(id: 3, title: "Grab", kind: 2, toolId: "builtin.brush", angleDeg: 90, ringRadius: 96),
+      .init(id: 4, title: "Clay", kind: 1, toolId: "builtin.brush", angleDeg: 150, ringRadius: 96),
+      .init(id: 5, title: "Mask", kind: 6, toolId: "builtin.brush", angleDeg: 210, ringRadius: 96),
+      .init(id: 6, title: "Draw", kind: 0, toolId: "builtin.brush", angleDeg: -60, ringRadius: 182),
+      .init(id: 7, title: "Crease", kind: 7, toolId: "builtin.brush", angleDeg: 0, ringRadius: 182),
+      .init(id: 8, title: "Layer", kind: 8, toolId: "builtin.brush", angleDeg: 60, ringRadius: 182),
+      .init(id: 9, title: "Snake", kind: 9, toolId: "builtin.brush", angleDeg: 120, ringRadius: 182),
+      .init(id: 10, title: "Sharp", kind: 10, toolId: "builtin.brush", angleDeg: 180, ringRadius: 182),
+      .init(id: 11, title: "Flatten", kind: 11, toolId: "builtin.brush", angleDeg: 240, ringRadius: 182),
     ]
 
     var body: some View {
       ZStack {
         Circle()
           .fill(.ultraThinMaterial)
-          .frame(width: 268, height: 268)
+          .frame(width: 452, height: 452)
           .opacity(0.92)
 
         ForEach(slices) { slice in
@@ -71,7 +79,7 @@ import SwiftUI
           .controlSize(.small)
         }
       }
-      .frame(width: 300, height: 300)
+      .frame(width: 480, height: 480)
       .opacity(visible ? 1 : 0)
       .allowsHitTesting(visible)
       .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveHandMenuChanged)) { _ in
@@ -83,7 +91,7 @@ import SwiftUI
     @ViewBuilder
     private func pieButton(_ slice: Slice) -> some View {
       let rad = slice.angleDeg * .pi / 180.0
-      let r: CGFloat = 96
+      let r = slice.ringRadius
       let x = CGFloat(cos(rad)) * r
       let y = CGFloat(sin(rad)) * r
       Button(slice.title) {

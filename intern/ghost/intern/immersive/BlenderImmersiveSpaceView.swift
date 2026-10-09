@@ -251,8 +251,11 @@ import simd
       /* RealityKit is Y-up. Keep Blender's floor origin at Y=0 by default,
        * with the scene placed 1.2 meters in front of the wearer.
        * Placement is applied to the shared world root (USD + Muse), not the
-       * USD file root alone — otherwise Muse tip and mesh frames diverge. */
-      worldRoot?.position = SIMD3(offset.x, offset.y, -1.2 + offset.z)
+       * USD file root alone — otherwise Muse tip and mesh frames diverge.
+       * Spatial hold (move / yaw / view scale) composes on top of placement. */
+      guard let worldRoot else { return }
+      BlenderImmersiveSpatialHold.shared.applyPlacement(
+        base: SIMD3(offset.x, offset.y, -1.2 + offset.z), to: worldRoot)
     }
 
     func updateActiveObject(name: String, blenderLocation: SIMD3<Float>) {
@@ -662,6 +665,7 @@ import simd
           worldMesh.start(worldRoot: worldRoot)
           viewerPose.attach(content: &content, worldRoot: worldRoot)
           BlenderImmersiveState.shared.sharedAnchor = sharedAnchor
+          bindSpatialExtras(worldRoot: worldRoot, container: container)
           remotePresenceRoot.name = "BlenderRemotePresence"
           worldRoot.addChild(remotePresenceRoot)
           content.add(handMenuAnchor)
@@ -750,6 +754,7 @@ import simd
         _ in
         guard let worldRoot = objectSync.sharedWorldRoot else { return }
         let payloads = BlenderImmersiveState.shared.liveMeshes
+        let revision = BlenderImmersiveState.shared.liveMeshRevision
         Task { @MainActor in
           if payloads.isEmpty {
             BlenderImmersiveLiveMeshBuilder.clear(from: worldRoot)
@@ -757,7 +762,7 @@ import simd
           }
           guard
             let liveRoot = await BlenderImmersiveLiveMeshBuilder.apply(
-              payloads: payloads, to: worldRoot)
+              payloads: payloads, revision: revision, to: worldRoot)
           else {
             return  /* superseded by a newer sculpt frame */
           }
@@ -887,6 +892,7 @@ import simd
             if let menu = handMenuEntityRef {
               applyHandMenuPalmVisibility(to: menu)
             }
+            syncSpatialHoldUIState()
             try? await Task.sleep(nanoseconds: 33_000_000)
           }
         }
@@ -894,6 +900,7 @@ import simd
       .onDisappear {
         handMenuPalmTask?.cancel()
         handMenuPalmTask = nil
+        unbindSpatialExtras()
         musePen.detach()
         handPen.detach()
         visionPlatform.detach()
@@ -947,6 +954,26 @@ import simd
       for child in remotePresenceRoot.children where !seen.contains(child.name) {
         child.removeFromParent()
       }
+    }
+
+    func bindSpatialExtras(worldRoot: Entity, container: Entity) {
+      let offset = placementOffset
+      let base = SIMD3<Float>(offset.x, offset.y, offset.z - 1.2)
+      let hold = BlenderImmersiveSpatialHold.shared
+      hold.musePen = musePen
+      hold.bind(worldRoot: worldRoot, handParent: container, placementBase: base)
+      BlenderImmersiveBrushPreview.shared.bind(worldRoot: worldRoot)
+    }
+
+    func unbindSpatialExtras() {
+      BlenderImmersiveSpatialHold.shared.unbind(from: immersiveWorldRoot)
+      BlenderImmersiveBrushPreview.shared.unbind(from: immersiveWorldRoot)
+    }
+
+    func syncSpatialHoldUIState() {
+      let hold = BlenderImmersiveSpatialHold.shared
+      hold.handMenuVisible = handMenuPalmFacing
+      hold.uiBlocked = shaderSpaceEnabled && shaderOverlay.isInteractive
     }
 
     private var placementOffset: SIMD3<Float> {

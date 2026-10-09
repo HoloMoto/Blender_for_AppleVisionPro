@@ -187,7 +187,25 @@ public extension Notification.Name {
     }
     liveMeshStaging.append(
       BlenderImmersiveLiveMeshPayload(
-        name: name, verts: verts, indices: indices, color: SIMD4(r, g, b, a)))
+        name: name, verts: verts, normals: Data(), indices: indices, color: SIMD4(r, g, b, a)))
+  }
+
+  /** Full-frame push with per-vertex normals (Float32 xyz, Blender axes; may be empty). */
+  @objc public func liveMeshPushFull(
+    _ name: String?, verts: Data?, normals: Data?, indices: Data?,
+    r: Float, g: Float, b: Float, a: Float
+  ) {
+    guard let name, !name.isEmpty, let verts, let indices, !verts.isEmpty, !indices.isEmpty else {
+      return
+    }
+    var normalData = normals ?? Data()
+    if normalData.count != verts.count {
+      normalData = Data()
+    }
+    liveMeshStaging.append(
+      BlenderImmersiveLiveMeshPayload(
+        name: name, verts: verts, normals: normalData, indices: indices,
+        color: SIMD4(r, g, b, a)))
   }
 
   @objc public func liveMeshCommit() {

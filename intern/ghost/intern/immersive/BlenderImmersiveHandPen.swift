@@ -21,6 +21,9 @@ import simd
   private func WM_IOS_immersive_muse_sample(
     _ x: Float, _ y: Float, _ z: Float, _ pressure: Float, _ tipPressed: Int32)
 
+  @_silgen_name("WM_IOS_immersive_muse_sample_dir")
+  private func WM_IOS_immersive_muse_sample_dir(_ dx: Float, _ dy: Float, _ dz: Float)
+
   @_silgen_name("WM_IOS_immersive_muse_sculpt_engaged")
   private func WM_IOS_immersive_muse_sculpt_engaged() -> Int32
 
@@ -292,6 +295,7 @@ import simd
         let tipDownVisual = pinchActive || sculptEngaged
         updateTipVisual(tipDown: tipDownVisual)
 
+        WM_IOS_immersive_muse_sample_dir(0, 0, 0)
         WM_IOS_immersive_muse_sample(blender.x, blender.y, blender.z, tipPressed != 0 ? 0.75 : 0, tipPressed)
         if BlenderImmersiveMultiuserSession.shared.isActive {
           BlenderImmersiveMultiuserSession.shared.sendLocalPresence(

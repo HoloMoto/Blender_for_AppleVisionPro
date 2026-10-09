@@ -16,12 +16,16 @@ import GameController
 import RealityKit
 import SwiftUI
 import UIKit
+import simd
 
 #if os(visionOS)
 
   @_silgen_name("WM_IOS_immersive_muse_sample")
   private func WM_IOS_immersive_muse_sample(
     _ x: Float, _ y: Float, _ z: Float, _ pressure: Float, _ tipPressed: Int32)
+
+  @_silgen_name("WM_IOS_immersive_muse_sample_dir")
+  private func WM_IOS_immersive_muse_sample_dir(_ dx: Float, _ dy: Float, _ dz: Float)
 
   @_silgen_name("WM_IOS_immersive_muse_knock")
   private func WM_IOS_immersive_muse_knock(_ count: Int32)
@@ -496,6 +500,11 @@ import UIKit
         let brush = BlenderImmersiveState.shared.handMenuBrushKind
         let brushName: String
         switch brush {
+        case 7: brushName = "Crease"
+        case 8: brushName = "Layer"
+        case 9: brushName = "Snake Hook"
+        case 10: brushName = "Draw Sharp"
+        case 11: brushName = "Flatten"
         case 4: brushName = "Inflate+"
         case 5: brushName = "Inflate−"
         case 6: brushName = "Mask"
@@ -532,16 +541,27 @@ import UIKit
           guard let self else { return }
           if let (key, anchor) = self.cursorByStylus.first {
             let blender: SIMD3<Float>
+            /* Aim = anchor −Z (MuseAimRay), worldRoot-relative → Blender, unit. */
+            var aimBlender = SIMD3<Float>.zero
             if let root = self.rootEntity {
               let m = anchor.transformMatrix(relativeTo: root)
               let local = SIMD3<Float>(m.columns.3.x, m.columns.3.y, m.columns.3.z)
               /* Blender X = RK X, Blender Y = -RK Z, Blender Z = RK Y. */
               blender = BlenderImmersiveCoords.realityKitToBlender(local)
+              aimBlender = BlenderImmersiveCoords.realityKitToBlender(
+                -SIMD3<Float>(m.columns.2.x, m.columns.2.y, m.columns.2.z))
             }
             else {
               let m = anchor.transformMatrix(relativeTo: nil)
               let world = SIMD3<Float>(m.columns.3.x, m.columns.3.y, m.columns.3.z)
               blender = self.realityKitWorldToBlender(world)
+            }
+            let aimLen = simd_length(aimBlender)
+            if aimLen.isFinite && aimLen > 1.0e-6 {
+              aimBlender /= aimLen
+            }
+            else {
+              aimBlender = .zero
             }
             self.lastTipBlender = blender
             /* Keep pie anchored on the tip while open. */
@@ -611,6 +631,7 @@ import UIKit
             let tipPressure = drawDown ? max(drawPressure, 0.15) : 0
             /* When hand-as-pen is on, HandPen owns the muse_sample pipe. */
             if !BlenderImmersiveState.shared.useHandAsPen {
+              WM_IOS_immersive_muse_sample_dir(aimBlender.x, aimBlender.y, aimBlender.z)
               WM_IOS_immersive_muse_sample(
                 blender.x, blender.y, blender.z, tipPressure, drawDown ? 1 : 0)
               if BlenderImmersiveMultiuserSession.shared.isActive {

@@ -6,8 +6,8 @@
  * Vision Pro platform publisher — feeds #BLENDER_VISIONOS_* for Python add-ons.
  *
  * Always-on while Immersive Space is open (independent of HandPen sculpt mode).
- * HandLocation subset that RealityKit exposes today: wrist / palm / thumb / index.
- * Middle/ring/little fields stay in the ABI (filled from palm until SDK grows).
+ * Wrist / palm / thumb / index via HandLocation; middle / ring / little tips via
+ * HandLocation.joint(for:) (palm fallback while untracked).
  */
 
 import Foundation
@@ -63,6 +63,9 @@ import simd
       var palm: AnchorEntity
       var thumb: AnchorEntity
       var index: AnchorEntity
+      var middle: AnchorEntity
+      var ring: AnchorEntity
+      var little: AnchorEntity
     }
 
     private var left: HandAnchors?
@@ -107,7 +110,10 @@ import simd
         wrist: anchor(.wrist, name: "VisionOSHand\(side)Wrist"),
         palm: anchor(.palm, name: "VisionOSHand\(side)Palm"),
         thumb: anchor(.thumbTip, name: "VisionOSHand\(side)Thumb"),
-        index: anchor(.indexFingerTip, name: "VisionOSHand\(side)Index"))
+        index: anchor(.indexFingerTip, name: "VisionOSHand\(side)Index"),
+        middle: anchor(.joint(for: .middleFingerTip), name: "VisionOSHand\(side)Middle"),
+        ring: anchor(.joint(for: .ringFingerTip), name: "VisionOSHand\(side)Ring"),
+        little: anchor(.joint(for: .littleFingerTip), name: "VisionOSHand\(side)Little"))
     }
 
     private func removeHand(_ hand: inout HandAnchors?) {
@@ -116,6 +122,9 @@ import simd
       h.palm.removeFromParent()
       h.thumb.removeFromParent()
       h.index.removeFromParent()
+      h.middle.removeFromParent()
+      h.ring.removeFromParent()
+      h.little.removeFromParent()
       hand = nil
     }
 
@@ -150,10 +159,10 @@ import simd
       side.palm = vec3(palm)
       side.thumb_tip = vec3(blenderPos(hand.thumb, root: root))
       side.index_tip = vec3(blenderPos(hand.index, root: root))
-      /* ABI reserved; RealityKit HandLocation has no middle/ring/little yet. */
-      side.middle_tip = side.palm
-      side.ring_tip = side.palm
-      side.little_tip = side.palm
+      /* Real joint anchors (visionOS 2+); palm only while a joint is untracked. */
+      side.middle_tip = hand.middle.isAnchored ? vec3(blenderPos(hand.middle, root: root)) : side.palm
+      side.ring_tip = hand.ring.isAnchored ? vec3(blenderPos(hand.ring, root: root)) : side.palm
+      side.little_tip = hand.little.isAnchored ? vec3(blenderPos(hand.little, root: root)) : side.palm
       if tracked && hand.thumb.isAnchored && hand.index.isAnchored {
         let d = simd_length(
           blenderPos(hand.thumb, root: root) - blenderPos(hand.index, root: root))

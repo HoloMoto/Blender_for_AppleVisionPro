@@ -342,9 +342,105 @@ public final class BlenderImmersiveBridge: NSObject {
     #endif
   }
 
+  @objc(liveMeshPushFullName:verts:normals:indices:r:g:b:a:)
+  public static func liveMeshPushFull(
+    _ name: String?, verts: Data?, normals: Data?, indices: Data?,
+    r: Float, g: Float, b: Float, a: Float
+  ) {
+    #if os(visionOS)
+      let apply = {
+        BlenderImmersiveState.shared.liveMeshPushFull(
+          name, verts: verts, normals: normals, indices: indices, r: r, g: g, b: b, a: a)
+      }
+      if Thread.isMainThread {
+        apply()
+      }
+      else {
+        DispatchQueue.main.sync(execute: apply)
+      }
+    #endif
+  }
+
+  /** In-place vertex range update; false → native must send a full frame. */
+  @objc(liveMeshUpdateName:vertexCount:ranges:verts:normals:)
+  public static func liveMeshUpdate(
+    _ name: String?, vertexCount: Int32, ranges: Data?, verts: Data?, normals: Data?
+  ) -> Bool {
+    #if os(visionOS)
+      guard let name, !name.isEmpty, let ranges, let verts, !ranges.isEmpty, !verts.isEmpty else {
+        return false
+      }
+      let normalData = normals ?? Data()
+      var ok = false
+      let apply = {
+        MainActor.assumeIsolated {
+          ok = BlenderImmersiveLiveMeshBuilder.update(
+            name: name, vertexCount: Int(vertexCount), ranges: ranges, verts: verts,
+            normals: normalData)
+        }
+      }
+      if Thread.isMainThread {
+        apply()
+      }
+      else {
+        DispatchQueue.main.sync(execute: apply)
+      }
+      return ok
+    #else
+      return false
+    #endif
+  }
+
+  @objc(updateBrushPreviewVisible:x:y:z:nx:ny:nz:radius:strength:active:kind:)
+  public static func updateBrushPreview(
+    _ visible: Bool, x: Float, y: Float, z: Float,
+    nx: Float, ny: Float, nz: Float, radius: Float, strength: Float, active: Bool, kind: Int32
+  ) {
+    #if os(visionOS)
+      BlenderImmersiveBrushPreviewMailbox.shared.post(
+        BlenderImmersiveBrushPreviewParams(
+          visible: visible,
+          position: SIMD3(x, y, z),
+          normal: SIMD3(nx, ny, nz),
+          radius: radius,
+          strength: strength,
+          active: active,
+          kind: Int(kind)))
+    #endif
+  }
+
+  /** Smoke-only spatial debug hook (see VP-159 spec D). */
+  @objc(debugSpatialAction:a:b:c:)
+  public static func debugSpatial(_ action: Int32, a: Float, b: Float, c: Float) -> String {
+    #if os(visionOS)
+      var text = "ok bound=0"
+      let run = {
+        MainActor.assumeIsolated {
+          text = BlenderImmersiveSpatialHold.shared.debug(action: action, a: a, b: b, c: c)
+        }
+      }
+      if Thread.isMainThread {
+        run()
+      }
+      else {
+        DispatchQueue.main.sync(execute: run)
+      }
+      return text
+    #else
+      return "unavailable"
+    #endif
+  }
+
   @objc public static func liveMeshCommit() {
     #if os(visionOS)
-      let apply = { BlenderImmersiveState.shared.liveMeshCommit() }
+      let apply = {
+        BlenderImmersiveState.shared.liveMeshCommit()
+        MainActor.assumeIsolated {
+          BlenderImmersiveLiveMeshBuilder.noteFullFrame(
+            BlenderImmersiveState.shared.liveMeshes,
+            revision: BlenderImmersiveState.shared.liveMeshRevision)
+        }
+      }
       if Thread.isMainThread {
         apply()
       }

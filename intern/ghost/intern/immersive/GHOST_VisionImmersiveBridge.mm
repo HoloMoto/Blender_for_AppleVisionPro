@@ -73,6 +73,31 @@
                        b:(float)b
                        a:(float)a;
 + (void)liveMeshCommit;
++ (void)liveMeshPushFullName:(NSString *)name
+                       verts:(NSData *)verts
+                     normals:(NSData *)normals
+                     indices:(NSData *)indices
+                           r:(float)r
+                           g:(float)g
+                           b:(float)b
+                           a:(float)a;
++ (BOOL)liveMeshUpdateName:(NSString *)name
+               vertexCount:(int)vertexCount
+                    ranges:(NSData *)ranges
+                     verts:(NSData *)verts
+                   normals:(NSData *)normals;
++ (void)updateBrushPreviewVisible:(BOOL)visible
+                                x:(float)x
+                                y:(float)y
+                                z:(float)z
+                               nx:(float)nx
+                               ny:(float)ny
+                               nz:(float)nz
+                           radius:(float)radius
+                         strength:(float)strength
+                           active:(BOOL)active
+                             kind:(int)kind;
++ (NSString *)debugSpatialAction:(int)action a:(float)a b:(float)b c:(float)c;
 + (void)speakersBegin;
 + (void)speakersPushName:(NSString *)name
                soundPath:(NSString *)soundPath
@@ -141,6 +166,114 @@ void GHOST_Vision_live_mesh_commit(void)
 {
   @autoreleasepool {
     [BlenderImmersiveBridge liveMeshCommit];
+  }
+}
+
+void GHOST_Vision_live_mesh_push_full(const char *name,
+                                      const int vert_count,
+                                      const float *verts_blender,
+                                      const float *normals_blender,
+                                      const int tri_count,
+                                      const unsigned int *indices,
+                                      const float r,
+                                      const float g,
+                                      const float b,
+                                      const float a)
+{
+  if (name == nullptr || verts_blender == nullptr || indices == nullptr || vert_count <= 0 ||
+      tri_count <= 0)
+  {
+    return;
+  }
+  @autoreleasepool {
+    NSString *n = [NSString stringWithUTF8String:name];
+    const NSUInteger vlen = (NSUInteger)vert_count * 3 * sizeof(float);
+    NSData *verts = [NSData dataWithBytes:verts_blender length:vlen];
+    NSData *normals = (normals_blender != nullptr) ?
+                          [NSData dataWithBytes:normals_blender length:vlen] :
+                          [NSData data];
+    NSData *idxs = [NSData dataWithBytes:indices
+                                  length:(NSUInteger)tri_count * 3 * sizeof(unsigned int)];
+    [BlenderImmersiveBridge liveMeshPushFullName:n
+                                           verts:verts
+                                         normals:normals
+                                         indices:idxs
+                                               r:r
+                                               g:g
+                                               b:b
+                                               a:a];
+  }
+}
+
+bool GHOST_Vision_live_mesh_update(const char *name,
+                                   const int vert_count,
+                                   const int range_count,
+                                   const int *ranges,
+                                   const int packed_count,
+                                   const float *verts_blender,
+                                   const float *normals_blender)
+{
+  if (name == nullptr || ranges == nullptr || verts_blender == nullptr || range_count <= 0 ||
+      packed_count <= 0)
+  {
+    return false;
+  }
+  @autoreleasepool {
+    NSString *n = [NSString stringWithUTF8String:name];
+    NSData *r = [NSData dataWithBytes:ranges length:(NSUInteger)range_count * 2 * sizeof(int)];
+    const NSUInteger vlen = (NSUInteger)packed_count * 3 * sizeof(float);
+    NSData *verts = [NSData dataWithBytes:verts_blender length:vlen];
+    NSData *normals = (normals_blender != nullptr) ?
+                          [NSData dataWithBytes:normals_blender length:vlen] :
+                          [NSData data];
+    return [BlenderImmersiveBridge liveMeshUpdateName:n
+                                          vertexCount:vert_count
+                                               ranges:r
+                                                verts:verts
+                                              normals:normals];
+  }
+}
+
+void GHOST_Vision_update_brush_preview(const bool visible,
+                                       const float x,
+                                       const float y,
+                                       const float z,
+                                       const float nx,
+                                       const float ny,
+                                       const float nz,
+                                       const float radius,
+                                       const float strength,
+                                       const bool active,
+                                       const int kind)
+{
+  @autoreleasepool {
+    [BlenderImmersiveBridge updateBrushPreviewVisible:visible
+                                                    x:x
+                                                    y:y
+                                                    z:z
+                                                   nx:nx
+                                                   ny:ny
+                                                   nz:nz
+                                               radius:radius
+                                             strength:strength
+                                               active:active
+                                                 kind:kind];
+  }
+}
+
+void GHOST_Vision_debug_spatial(
+    const int action, const float a, const float b, const float c, char *r_buf, const int buf_len)
+{
+  if (r_buf == nullptr || buf_len <= 0) {
+    return;
+  }
+  r_buf[0] = '\0';
+  @autoreleasepool {
+    NSString *result = [BlenderImmersiveBridge debugSpatialAction:action a:a b:b c:c];
+    if (result != nil) {
+      strncpy(r_buf, result.UTF8String, size_t(buf_len - 1));
+      r_buf[buf_len - 1] = '\0';
+    }
   }
 }
 
@@ -544,6 +677,53 @@ void GHOST_Vision_live_mesh_push(const char * /*name*/,
 {
 }
 void GHOST_Vision_live_mesh_commit(void) {}
+void GHOST_Vision_live_mesh_push_full(const char * /*name*/,
+                                      const int /*vert_count*/,
+                                      const float * /*verts_blender*/,
+                                      const float * /*normals_blender*/,
+                                      const int /*tri_count*/,
+                                      const unsigned int * /*indices*/,
+                                      const float /*r*/,
+                                      const float /*g*/,
+                                      const float /*b*/,
+                                      const float /*a*/)
+{
+}
+bool GHOST_Vision_live_mesh_update(const char * /*name*/,
+                                   const int /*vert_count*/,
+                                   const int /*range_count*/,
+                                   const int * /*ranges*/,
+                                   const int /*packed_count*/,
+                                   const float * /*verts_blender*/,
+                                   const float * /*normals_blender*/)
+{
+  return false;
+}
+void GHOST_Vision_update_brush_preview(const bool /*visible*/,
+                                       const float /*x*/,
+                                       const float /*y*/,
+                                       const float /*z*/,
+                                       const float /*nx*/,
+                                       const float /*ny*/,
+                                       const float /*nz*/,
+                                       const float /*radius*/,
+                                       const float /*strength*/,
+                                       const bool /*active*/,
+                                       const int /*kind*/)
+{
+}
+void GHOST_Vision_debug_spatial(const int /*action*/,
+                                const float /*a*/,
+                                const float /*b*/,
+                                const float /*c*/,
+                                char *r_buf,
+                                const int buf_len)
+{
+  if (r_buf != nullptr && buf_len > 0) {
+    strncpy(r_buf, "unsupported", size_t(buf_len - 1));
+    r_buf[buf_len - 1] = '\0';
+  }
+}
 
 void GHOST_Vision_speakers_begin(void) {}
 void GHOST_Vision_speakers_push(const char * /*name*/,

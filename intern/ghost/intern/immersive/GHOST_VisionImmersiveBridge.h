@@ -37,6 +37,43 @@ void GHOST_Vision_live_mesh_push(const char *name,
                                  float b,
                                  float a);
 void GHOST_Vision_live_mesh_commit(void);
+/** Full live mesh with vertex normals (Blender axes, unit). Use between begin/commit. */
+void GHOST_Vision_live_mesh_push_full(const char *name,
+                                      int vert_count,
+                                      const float *verts_blender,
+                                      const float *normals_blender,
+                                      int tri_count,
+                                      const unsigned int *indices,
+                                      float r,
+                                      float g,
+                                      float b,
+                                      float a);
+/**
+ * Partial in-place update of an existing live mesh (no begin/commit).
+ * \param ranges: (start, count) pairs; verts/normals are packed for all ranges in order.
+ * \return false when the mesh has to be pushed in full again.
+ */
+bool GHOST_Vision_live_mesh_update(const char *name,
+                                   int vert_count,
+                                   int range_count,
+                                   const int *ranges,
+                                   int packed_count,
+                                   const float *verts_blender,
+                                   const float *normals_blender);
+/** Spatial brush preview at the pen tip (Blender coords). */
+void GHOST_Vision_update_brush_preview(bool visible,
+                                       float x,
+                                       float y,
+                                       float z,
+                                       float nx,
+                                       float ny,
+                                       float nz,
+                                       float radius,
+                                       float strength,
+                                       bool active,
+                                       int kind);
+/** Smoke-test hook for spatial hold / scale / preview. Writes a status line into r_buf. */
+void GHOST_Vision_debug_spatial(int action, float a, float b, float c, char *r_buf, int buf_len);
 
 /** Speaker objects → RealityKit SpatialAudio (AUDASPACE off on visionOS). */
 void GHOST_Vision_speakers_begin(void);

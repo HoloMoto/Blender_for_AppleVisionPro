@@ -22,6 +22,12 @@ import SwiftUI
   @_silgen_name("WM_IOS_immersive_set_hand_proximity_sculpt")
   private func WM_IOS_immersive_set_hand_proximity_sculpt(_ enabled: Int32)
 
+  @_silgen_name("WM_IOS_immersive_set_sculpt_engine")
+  private func WM_IOS_immersive_set_sculpt_engine(_ engine: Int32)
+
+  @_silgen_name("WM_IOS_immersive_get_sculpt_engine")
+  private func WM_IOS_immersive_get_sculpt_engine() -> Int32
+
   @_silgen_name("WM_IOS_immersive_set_shader_space")
   private func WM_IOS_immersive_set_shader_space(_ enabled: Int32)
 
@@ -92,6 +98,9 @@ import SwiftUI
     @State private var matName = BlenderImmersiveState.shared.shaderMaterialName
     @State private var editFloats: [String: Float] = [:]
     @State private var editColors: [String: (Float, Float, Float, Float)] = [:]
+    /** 0 legacy custom deform, 1 Blender brush engine. */
+    @State private var sculptEngine: Int32 = 1
+    @ObservedObject private var spatialHold = BlenderImmersiveSpatialHold.shared
 
     var body: some View {
       HStack(alignment: .top, spacing: 8) {
@@ -122,7 +131,7 @@ import SwiftUI
           Spacer(minLength: 0)
         }
         .padding(8)
-        .frame(width: 78, height: matMode ? 360 : 300)
+        .frame(width: 78, height: matMode ? 360 : 380)
         .glassBackgroundEffect()
 
         VStack(alignment: .leading, spacing: 8) {
@@ -135,7 +144,7 @@ import SwiftUI
           Spacer(minLength: 0)
         }
         .padding(12)
-        .frame(width: matMode ? 240 : 210, height: matMode ? 360 : 300, alignment: .topLeading)
+        .frame(width: matMode ? 240 : 210, height: matMode ? 360 : 380, alignment: .topLeading)
         .glassBackgroundEffect()
       }
       .onAppear(perform: syncFromState)
@@ -192,6 +201,54 @@ import SwiftUI
           in: 0.02...0.80,
           step: 0.02)
       }
+
+      if mode == 2 {
+        Button(sculptEngine == 0 ? "Engine: Legacy" : "Engine: Blender") {
+          let next: Int32 = sculptEngine == 0 ? 1 : 0
+          sculptEngine = next
+          WM_IOS_immersive_set_sculpt_engine(next)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .frame(maxWidth: .infinity, minHeight: 36)
+        .tint(sculptEngine == 0 ? .gray.opacity(0.5) : .indigo.opacity(0.85))
+      }
+
+      spatialControls
+    }
+
+    /** Spatial hold / view scale (TF-159). */
+    @ViewBuilder private var spatialControls: some View {
+      let scaleLabel =
+        spatialHold.isRealScale ? "1:1" : String(format: "卓上 ×%.2f", spatialHold.displayScale)
+      HStack(spacing: 6) {
+        Button(scaleLabel) {
+          spatialHold.toggleRealScale()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .frame(maxWidth: .infinity, minHeight: 36)
+        .tint(spatialHold.isRealScale ? .gray.opacity(0.5) : .teal.opacity(0.85))
+
+        Button("リセット") {
+          spatialHold.reset()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .frame(maxWidth: .infinity, minHeight: 36)
+      }
+      Button(spatialHold.holdEnabled ? "ホールド ON" : "ホールド OFF") {
+        spatialHold.setHoldEnabled(!spatialHold.holdEnabled)
+      }
+      .buttonStyle(.bordered)
+      .controlSize(.small)
+      .frame(maxWidth: .infinity, minHeight: 36)
+      .tint(spatialHold.holdEnabled ? .green.opacity(0.8) : .gray.opacity(0.5))
+      Text(spatialHold.statusText)
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
     }
 
     @ViewBuilder private var matPanel: some View {
@@ -423,6 +480,7 @@ import SwiftUI
     }
 
     private func syncFromState() {
+      sculptEngine = WM_IOS_immersive_get_sculpt_engine() == 0 ? 0 : 1
       useHandAsPen = BlenderImmersiveState.shared.useHandAsPen
       handProximitySculpt = BlenderImmersiveState.shared.handProximitySculpt
       matMode = BlenderImmersiveState.shared.shaderSpaceEnabled

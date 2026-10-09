@@ -22,7 +22,7 @@ Status
 |---|---|
 | Track | **Blender 5.0 line** (marketing `5.0.1`) |
 | Branch | **`immersive-space`** (remote `visionpro` → [HoloMoto/Blender_for_AppleVisionPro](https://github.com/HoloMoto/Blender_for_AppleVisionPro)) |
-| Latest TestFlight (Vision Pro) | **158** — Nomad-style touch navigation in the 3D Viewport (two-finger pan, pinch zoom, one-finger orbit on empty space); includes 157 Preferences persistence |
+| Latest TestFlight (Vision Pro) | **159** — spatial sculpt: Muse / hand pen drive Blender's real brush engine in 3D (all brushes, symmetry, undo), partial Live Mesh updates for high-poly, brush preview ring, two-hand hold, 1:1 ↔ desk scale, peace-pose pan; includes 158 touch navigation and 157 Preferences persistence |
 | 5.3 line | Paused (`immersive-space-53`). Not shipped until it launches as reliably as 5.0 |
 
 Experimental. Usable for development and testing on device; not a release build.
@@ -47,6 +47,13 @@ Features (visionOS)
 
 - **Logitech Muse** spatial pen: pressure sculpting, near-mesh brush switching,
   far-from-mesh secondary button opens a **brush pie menu**
+- **Spatial sculpt**: the pen tip and its aim drive Blender's own sculpt stroke in 3D
+  (brush assets Draw, Clay Strips, Grab, Smooth, Inflate/Deflate, Mask, Crease, Layer,
+  Snake Hook, Draw Sharp, Flatten; symmetry, auto-masking, one undo step per stroke),
+  radius in world units, brush preview ring on the surface. The previous custom deform
+  stays available via the Hand Menu engine toggle
+- Two-hand hold moves / rotates / scales the Immersive scene; Hand Menu toggles
+  **1:1 ↔ desk** scale; a peace pose turns one-finger window drag into pan
 - Hand Menu (shown only when the palm faces the user), hand tracking API for add-ons
 - **Nomad-style touch navigation** in the window 3D Viewport (finger input only):
   two-finger drag pans, pinch zooms, one-finger drag starting on empty space orbits.

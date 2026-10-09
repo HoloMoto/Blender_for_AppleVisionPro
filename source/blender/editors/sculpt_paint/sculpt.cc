@@ -28,6 +28,7 @@
 #include "BLI_rect.h"
 #include "BLI_set.hh"
 #include "BLI_span.hh"
+#include "BLI_string_utf8.h"
 #include "BLI_task.h"
 #include "BLI_task.hh"
 #include "BLI_utildefines.h"
@@ -47,6 +48,7 @@
 #include "BKE_context.hh"
 #include "BKE_customdata.hh"
 #include "BKE_global.hh"
+#include "BKE_idprop.hh"
 #include "BKE_image.hh"
 #include "BKE_key.hh"
 #include "BKE_layer.hh"
@@ -110,6 +112,26 @@ static CLG_LogRef LOG = {"sculpt"};
 
 namespace blender::ed::sculpt_paint {
 
+namespace spatial {
+
+/** Tool state used instead of the view while a spatial stroke or cursor query is evaluated. */
+struct Override {
+  bool active = false;
+  float3 tip_world;
+  float3 dir_world;
+  float reach = 0.0f;
+  float radius_world = 0.0f;
+};
+
+static Override g_override;
+
+static bool override_active()
+{
+  return g_override.active;
+}
+
+}  // namespace spatial
+
 /* TODO: This should be moved to either BKE_paint.hh or BKE_brush.hh */
 float object_space_radius_get(const ViewContext &vc,
                               const Paint &paint,
@@ -117,6 +139,10 @@ float object_space_radius_get(const ViewContext &vc,
                               const float3 &location,
                               const float scale_factor)
 {
+  if (spatial::override_active() && vc.obact) {
+    const float scale = math::average(math::to_scale(vc.obact->object_to_world()));
+    return spatial::g_override.radius_world / std::max(scale, 1e-6f) * scale_factor;
+  }
   if (!BKE_brush_use_locked_size(&paint, &brush)) {
     return paint_calc_object_space_radius(
         vc, location, BKE_brush_radius_get(&paint, &brush) * scale_factor);
@@ -4019,6 +4045,10 @@ static void sculpt_update_cache_invariants(
   ob.runtime->world_to_object = math::invert(ob.object_to_world());
   cache->view_normal = math::normalize(math::transform_direction(
       ob.world_to_object() * float4x4(cache->vc->rv3d->viewinv), z_axis));
+  if (spatial::override_active()) {
+    cache->view_normal = math::normalize(
+        math::transform_direction(ob.world_to_object(), -spatial::g_override.dir_world));
+  }
 
   cache->supports_gravity = bke::brush::supports_gravity(*brush) && sd.gravity_factor > 0.0f;
   /* Get gravity vector in world space. */
@@ -4199,7 +4229,12 @@ static void brush_delta_update(const Depsgraph &depsgraph,
 
   /* Compute 3d coordinate at same z from original location + mval. */
   mul_v3_m4v3(loc, ob.object_to_world().ptr(), cache->orig_grab_location);
-  ED_view3d_win_to_3d(cache->vc->v3d, cache->vc->region, loc, mval, grab_location);
+  if (spatial::override_active()) {
+    copy_v3_v3(grab_location, spatial::g_override.tip_world);
+  }
+  else {
+    ED_view3d_win_to_3d(cache->vc->v3d, cache->vc->region, loc, mval, grab_location);
+  }
 
   /* Compute delta to move verts by. */
   if (!SCULPT_stroke_is_first_brush_step_of_symmetry_pass(*ss.cache)) {
@@ -4648,6 +4683,18 @@ float raycast_init(ViewContext *vc,
   RegionView3D *rv3d = vc->rv3d;
   View3D *v3d = vc->v3d;
 
+  if (spatial::override_active()) {
+    const spatial::Override &tool = spatial::g_override;
+    const float4x4 &world_to_object = ob.world_to_object();
+    r_ray_start = math::transform_point(world_to_object,
+                                        tool.tip_world - tool.dir_world * tool.reach);
+    r_ray_end = math::transform_point(world_to_object,
+                                      tool.tip_world + tool.dir_world * tool.reach);
+    float dist;
+    r_ray_normal = math::normalize_and_get_length(r_ray_end - r_ray_start, dist);
+    return dist;
+  }
+
   /* TODO: what if the segment is totally clipped? (return == 0). */
   ED_view3d_win_to_segment_clipped(
       vc->depsgraph, vc->region, vc->v3d, mval, r_ray_start, r_ray_end, true);
@@ -4783,6 +4830,10 @@ bool cursor_geometry_info_update(bContext *C,
   ob.runtime->world_to_object = math::invert(ob.object_to_world());
   ss.cursor_view_normal = math::normalize(
       math::transform_direction(ob.world_to_object() * float4x4(vc.rv3d->viewinv), z_axis));
+  if (spatial::override_active()) {
+    ss.cursor_view_normal = math::normalize(
+        math::transform_direction(ob.world_to_object(), -spatial::g_override.dir_world));
+  }
   ss.cursor_normal = srd.face_normal;
   ss.cursor_location = out->location;
   ss.rv3d = vc.rv3d;
@@ -5756,6 +5807,256 @@ static void sculpt_brush_stroke_cancel(bContext *C, wmOperator *op)
 
   brush_exit_tex(sd);
 }
+
+namespace spatial {
+
+struct Driver {
+  wmOperator *op = nullptr;
+  PaintStroke *stroke = nullptr;
+  Object *object = nullptr;
+};
+
+static Driver g_driver;
+
+class OverrideScope {
+ public:
+  explicit OverrideScope(const ToolSample &sample)
+  {
+    float3 dir(sample.dir);
+    if (math::length_squared(dir) < 1e-12f) {
+      dir = float3(0.0f, 0.0f, -1.0f);
+    }
+    g_override.tip_world = float3(sample.tip);
+    g_override.dir_world = math::normalize(dir);
+    g_override.reach = std::max(sample.reach, 1e-4f);
+    g_override.radius_world = std::max(sample.radius, 1e-5f);
+    g_override.active = true;
+  }
+  ~OverrideScope()
+  {
+    g_override.active = false;
+  }
+};
+
+/** Same as #brush_stroke_init, without binding the viewport for drawing: spatial strokes are
+ * driven outside of region drawing and event handling. */
+static void stroke_init_no_gpu(bContext *C)
+{
+  Object &ob = *CTX_data_active_object(C);
+  ToolSettings *tool_settings = CTX_data_tool_settings(C);
+  const Sculpt &sd = *tool_settings->sculpt;
+  SculptSession &ss = *ob.sculpt;
+  const Brush *brush = BKE_paint_brush_for_read(&sd.paint);
+
+  brush_init_tex(sd, ss);
+
+  if (brush_type_is_paint(brush->sculpt_brush_type) &&
+      !SCULPT_use_image_paint_brush(tool_settings->paint_mode, ob))
+  {
+    BKE_sculpt_color_layer_create_if_needed(&ob);
+  }
+
+  Depsgraph *depsgraph = CTX_data_ensure_evaluated_depsgraph(C);
+  BKE_sculpt_update_object_for_edit(depsgraph, &ob, brush_type_is_paint(brush->sculpt_brush_type));
+}
+
+static bool context_valid(bContext *C)
+{
+  Object *ob = CTX_data_active_object(C);
+  if (!ob || !ob->sculpt || (ob->mode & OB_MODE_SCULPT) == 0 || ob->type != OB_MESH) {
+    return false;
+  }
+  if (!CTX_wm_region_view3d(C) || !CTX_wm_view3d(C) || !CTX_data_tool_settings(C)->sculpt) {
+    return false;
+  }
+  const Base *base = CTX_data_active_base(C);
+  return base && BKE_base_is_visible(CTX_wm_view3d(C), base);
+}
+
+static wmOperator *operator_create(const int stroke_mode)
+{
+  wmOperatorType *ot = WM_operatortype_find("SCULPT_OT_brush_stroke", false);
+  if (!ot) {
+    return nullptr;
+  }
+  wmOperator *op = MEM_callocN<wmOperator>(__func__);
+  op->type = ot;
+  STRNCPY_UTF8(op->idname, ot->idname);
+  op->ptr = MEM_new<PointerRNA>("wmOperatorPtrRNA");
+  op->properties = bke::idprop::create_group("wmOperatorProperties").release();
+  *op->ptr = RNA_pointer_create_discrete(nullptr, ot->srna, op->properties);
+  op->reports = MEM_callocN<ReportList>("wmOperatorReportList");
+  BKE_reports_init(op->reports, RPT_STORE | RPT_FREE);
+  /* Makes #stroke_test_start require the tool ray to hit the mesh. */
+  op->flag |= OP_IS_INVOKE;
+  RNA_enum_set(op->ptr, "mode", stroke_mode);
+  return op;
+}
+
+bool stroke_active()
+{
+  return g_driver.op != nullptr;
+}
+
+void stroke_end(bContext *C)
+{
+  if (!g_driver.op) {
+    return;
+  }
+  wmOperator *op = g_driver.op;
+  PaintStroke *stroke = g_driver.stroke;
+  const bool same_object = g_driver.object == CTX_data_active_object(C);
+  g_driver = {};
+  if (stroke) {
+    if (same_object && context_valid(C)) {
+      paint_stroke_spatial_end(C, op, stroke);
+    }
+    else {
+      /* Sculpt Mode was left (or the object changed) mid-stroke: the stroke cache is gone. */
+      paint_stroke_free(C, op, stroke);
+    }
+  }
+  op->customdata = nullptr;
+  WM_operator_free(op);
+}
+
+bool stroke_sample(bContext *C, const ToolSample &sample)
+{
+  if (!context_valid(C)) {
+    stroke_end(C);
+    return false;
+  }
+  OverrideScope scope(sample);
+  if (!g_driver.op) {
+    Object &ob = *CTX_data_active_object(C);
+    const Scene &scene = *CTX_data_scene(C);
+    Sculpt &sd = *CTX_data_tool_settings(C)->sculpt;
+    const Brush *brush = BKE_paint_brush_for_read(&sd.paint);
+    if (!brush) {
+      return false;
+    }
+    if (brush_type_is_paint(brush->sculpt_brush_type) &&
+        !color_supported_check(scene, ob, nullptr))
+    {
+      return false;
+    }
+    if (!brush_type_is_attribute_only(brush->sculpt_brush_type) &&
+        report_if_shape_key_is_locked(ob, nullptr))
+    {
+      return false;
+    }
+    stroke_init_no_gpu(C);
+    if (brush_type_is_mask(brush->sculpt_brush_type)) {
+      MultiresModifierData *mmd = BKE_sculpt_multires_active(&scene, &ob);
+      BKE_sculpt_mask_layers_ensure(CTX_data_depsgraph_pointer(C), CTX_data_main(C), &ob, mmd);
+    }
+    wmOperator *op = operator_create(sample.stroke_mode);
+    if (!op) {
+      return false;
+    }
+    PaintStroke *stroke = paint_stroke_new(C,
+                                           op,
+                                           stroke_get_location_bvh,
+                                           stroke_test_start,
+                                           stroke_update_step,
+                                           nullptr,
+                                           stroke_done,
+                                           0);
+    op->customdata = stroke;
+    g_driver.op = op;
+    g_driver.stroke = stroke;
+    g_driver.object = &ob;
+  }
+  else if (g_driver.object != CTX_data_active_object(C)) {
+    stroke_end(C);
+    return false;
+  }
+  return paint_stroke_spatial_step(
+      C, g_driver.op, g_driver.stroke, float2(sample.mval), std::clamp(sample.pressure, 0.0f, 1.0f));
+}
+
+bool cursor_sample(bContext *C, const ToolSample &sample, float r_location[3], float r_normal[3])
+{
+  if (!context_valid(C)) {
+    return false;
+  }
+  Object &ob = *CTX_data_active_object(C);
+  if (!bke::object::pbvh_get(ob)) {
+    return false;
+  }
+  OverrideScope scope(sample);
+  CursorGeometryInfo cgi;
+  if (!cursor_geometry_info_update(C, &cgi, float2(sample.mval), !stroke_active())) {
+    return false;
+  }
+  const float4x4 &object_to_world = ob.object_to_world();
+  copy_v3_v3(r_location, math::transform_point(object_to_world, cgi.location));
+  float3 normal = math::transform_direction(math::transpose(ob.world_to_object()), cgi.normal);
+  if (math::length_squared(normal) < 1e-12f) {
+    normal = -g_override.dir_world;
+  }
+  copy_v3_v3(r_normal, math::normalize(normal));
+  return true;
+}
+
+float nearest_vertex_distance(const Depsgraph &depsgraph,
+                              Object &ob,
+                              const float point[3],
+                              const float max_distance)
+{
+  if (!ob.sculpt || ob.type != OB_MESH) {
+    return -1.0f;
+  }
+  const bke::pbvh::Tree *pbvh = bke::object::pbvh_get(ob);
+  if (!pbvh) {
+    return -1.0f;
+  }
+  const float scale = std::max(math::average(math::to_scale(ob.object_to_world())), 1e-6f);
+  const float3 location = math::transform_point(ob.world_to_object(), float3(point));
+  const float max_distance_object = max_distance / scale;
+  std::optional<float3> nearest_position;
+  switch (pbvh->type()) {
+    case bke::pbvh::Type::Mesh: {
+      const Mesh &mesh = *static_cast<const Mesh *>(ob.data);
+      const Span<float3> positions = bke::pbvh::vert_positions_eval(depsgraph, ob);
+      const bke::AttributeAccessor attributes = mesh.attributes();
+      const VArraySpan<bool> hide_vert = *attributes.lookup<bool>(".hide_vert",
+                                                                  bke::AttrDomain::Point);
+      const std::optional<int> vert = nearest_vert_calc_mesh(
+          *pbvh, positions, hide_vert, location, max_distance_object, false);
+      if (vert && *vert >= 0) {
+        nearest_position = positions[*vert];
+      }
+      break;
+    }
+    case bke::pbvh::Type::Grids: {
+      const SubdivCCG &subdiv_ccg = *ob.sculpt->subdiv_ccg;
+      if (const std::optional<SubdivCCGCoord> coord = nearest_vert_calc_grids(
+              *pbvh, subdiv_ccg, location, max_distance_object, false))
+      {
+        const CCGKey key = BKE_subdiv_ccg_key_top_level(subdiv_ccg);
+        nearest_position = subdiv_ccg.positions[coord->to_index(key)];
+      }
+      break;
+    }
+    case bke::pbvh::Type::BMesh: {
+      if (const std::optional<BMVert *> vert = nearest_vert_calc_bmesh(
+              *pbvh, location, max_distance_object, false))
+      {
+        if (*vert) {
+          nearest_position = float3((*vert)->co);
+        }
+      }
+      break;
+    }
+  }
+  if (!nearest_position) {
+    return -1.0f;
+  }
+  return math::distance(location, *nearest_position) * scale;
+}
+
+}  // namespace spatial
 
 static wmOperatorStatus brush_stroke_modal(bContext *C, wmOperator *op, const wmEvent *event)
 {
