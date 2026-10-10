@@ -11298,6 +11298,30 @@ static void WM_OT_ios_immersive_remesh(wmOperatorType *ot)
   ot->poll = wm_ios_immersive_poll;
 }
 
+static wmOperatorStatus wm_ios_immersive_reset_origin_exec(bContext * /*C*/, wmOperator *op)
+{
+  char status[256];
+  if (!GHOST_IOS_immersive_reset_origin(status, int(sizeof(status)))) {
+    BKE_report(op->reports, RPT_WARNING, "Immersive Space is not open");
+    return OPERATOR_CANCELLED;
+  }
+  if (status[0]) {
+    BKE_report(op->reports, RPT_INFO, status);
+  }
+  return OPERATOR_FINISHED;
+}
+
+static void WM_OT_ios_immersive_reset_origin(wmOperatorType *ot)
+{
+  ot->name = "Reset Immersive Origin";
+  ot->idname = "WM_OT_ios_immersive_reset_origin";
+  ot->description =
+      "Move the Immersive scene back to the default origin: placement offset, hold and view "
+      "scale (keeps the locked spectator origin)";
+  ot->exec = wm_ios_immersive_reset_origin_exec;
+  ot->poll = wm_ios_immersive_poll;
+}
+
 static char g_wm_ios_debug_spatial_reply[512] = "";
 static double g_wm_ios_debug_near_legacy_ms = 0.0;
 static double g_wm_ios_debug_near_fast_ms = 0.0;
@@ -11537,6 +11561,7 @@ void wm_operatortypes_register()
   WM_operatortype_append(WM_OT_ios_immersive_set_sync_transforms);
   WM_operatortype_append(WM_OT_ios_immersive_set_muse_knock_brush);
   WM_operatortype_append(WM_OT_ios_immersive_remesh);
+  WM_operatortype_append(WM_OT_ios_immersive_reset_origin);
   WM_operatortype_append(WM_OT_ios_immersive_debug_spatial);
   WM_operatortype_append(WM_OT_ios_immersive_multiuser_host);
   WM_operatortype_append(WM_OT_ios_immersive_multiuser_join);

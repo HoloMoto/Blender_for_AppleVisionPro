@@ -209,6 +209,11 @@ extern void GHOST_IOS_immersive_update_brush_preview(int visible,
 /** Smoke-test hook for spatial hold / scale / brush preview (status line in \a r_buf). */
 extern void GHOST_IOS_immersive_debug_spatial(
     int action, float a, float b, float c, char *r_buf, int buf_len);
+/**
+ * Reset Immersive placement offset, hold and view scale to the default origin.
+ * \return false when the Immersive Space is not open (\a r_buf left empty).
+ */
+extern bool GHOST_IOS_immersive_reset_origin(char *r_buf, int buf_len);
 
 /**
  * Speaker → RealityKit SpatialAudio. visionOS has WITH_AUDASPACE=OFF, so Immersive

@@ -303,6 +303,8 @@ class ImmersivePanelBase:
         col = layout.column(align=True)
         col.label(text="Vision Pro Immersive", icon='WORLD')
         col.operator("wm.ios_immersive_toggle", text="Immersive 開く / 閉じる", icon='PLAY')
+        if _wm_op_exists("ios_immersive_reset_origin"):
+            col.operator("wm.ios_immersive_reset_origin", text="原点リセット", icon='ORIENTATION_GLOBAL')
         if _wm_op_exists("ios_immersive_extract_active"):
             col.operator(
                 "wm.ios_immersive_extract_active",
@@ -407,6 +409,8 @@ def _draw_window_spectator_menu(self, context):
         layout.label(text="合わせネイティブ未搭載")
     if _has_immersive_ops():
         layout.operator("wm.ios_immersive_toggle", text="Immersive 開く / 閉じる", icon='PLAY')
+    if _wm_op_exists("ios_immersive_reset_origin"):
+        layout.operator("wm.ios_immersive_reset_origin", text="Immersive 原点リセット", icon='ORIENTATION_GLOBAL')
 
 
 def register_props():

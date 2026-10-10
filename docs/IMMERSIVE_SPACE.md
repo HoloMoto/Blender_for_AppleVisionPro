@@ -112,11 +112,24 @@ The Muse tip (or the hand pen) drives Blender's own sculpt stroke system in 3D:
   (`GHOST_IOS_immersive_live_mesh_update` → `LowLevelMesh` in-place write), full frame as fallback.
   Sculpt meshes ≥ 150k verts skip the tip-up USD rebuild (live mesh only).
 - Near-mesh distance uses the sculpt BVH (`nearest_vertex_distance`) instead of a full scan.
-- Spatial UI: brush preview ring at the surface hit (normal + strength), two-hand hold
-  (move / rotate / scale the scene), Hand Menu **1:1 ↔ desk** scale toggle around the view
-  center, and a peace pose (index + middle extended) that turns window 1-finger drag into pan
-  (`blender_ios_hand_pose` → `set_drag_pan_override`, RealityKit joint anchors only).
-  Hold is disabled while spectator alignment is locked.
+- Spatial UI: brush preview ring at the surface hit (normal + strength), Hand Menu
+  **1:1 ↔ desk** scale toggle around the view center, and **原点リセット** (TF-160).
+- Two-hand hold (TF-160 rework, **off by default**, Hand Menu toggle): both hands pinch and
+  hold still for 0.35 s, then the scene follows the midpoint (move), inter-hand direction (yaw)
+  and distance (scale). Hand input is low-pass filtered (τ 80 ms) with soft deadzones
+  (8 mm / 0.05 rad / 4 % scale); the root transform is written only while held and only when it
+  changes. Disabled while the Muse tip is down, hand-as-pen is on, the Hand Menu / Mat board
+  is up, or spectator alignment is locked.
+  TF-159 grabbed with **one** left-hand pinch (0.25 s, 1 cm) and raw palm yaw: every look-and-pinch
+  drag on a window also dragged the Immersive scene, and palm-yaw noise at the 1.2 m lever arm
+  made it shake. That path is removed.
+- Planar viewport pan is off while Immersive is open: `BLENDER_VISIONOS_touch_navigation_effective()`
+  masks `TWO_FINGER_PAN` / `DRAG_PAN` (two-finger drag orbits as before 158), and the peace pose
+  (`blender_ios_hand_pose`) is only detected, never switching drags to pan.
+- Origin reset: `wm.ios_immersive_reset_origin` (N-panel Immersive, Window menu) and the Hand
+  Menu button clear the placement offset (Space tab sliders), hold move / yaw and view scale.
+  While the spectator origin is locked the scene stays on the locked WorldAnchor (offsets are
+  cleared so unlocking does not jump).
 
 ### Phase 2 MVP (superseded by Phase 3 for Sculpt)
 

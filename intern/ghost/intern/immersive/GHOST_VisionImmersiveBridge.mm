@@ -98,6 +98,7 @@
                            active:(BOOL)active
                              kind:(int)kind;
 + (NSString *)debugSpatialAction:(int)action a:(float)a b:(float)b c:(float)c;
++ (NSString *)spatialResetOrigin;
 + (void)speakersBegin;
 + (void)speakersPushName:(NSString *)name
                soundPath:(NSString *)soundPath
@@ -273,6 +274,20 @@ void GHOST_Vision_debug_spatial(
     if (result != nil) {
       strncpy(r_buf, result.UTF8String, size_t(buf_len - 1));
       r_buf[buf_len - 1] = '\0';
+    }
+  }
+}
+
+void GHOST_Vision_spatial_reset_origin(char *r_buf, const int buf_len)
+{
+  @autoreleasepool {
+    NSString *result = [BlenderImmersiveBridge spatialResetOrigin];
+    if (r_buf != nullptr && buf_len > 0) {
+      r_buf[0] = '\0';
+      if (result != nil) {
+        strncpy(r_buf, result.UTF8String, size_t(buf_len - 1));
+        r_buf[buf_len - 1] = '\0';
+      }
     }
   }
 }
@@ -722,6 +737,12 @@ void GHOST_Vision_debug_spatial(const int /*action*/,
   if (r_buf != nullptr && buf_len > 0) {
     strncpy(r_buf, "unsupported", size_t(buf_len - 1));
     r_buf[buf_len - 1] = '\0';
+  }
+}
+void GHOST_Vision_spatial_reset_origin(char *r_buf, const int buf_len)
+{
+  if (r_buf != nullptr && buf_len > 0) {
+    r_buf[0] = '\0';
   }
 }
 

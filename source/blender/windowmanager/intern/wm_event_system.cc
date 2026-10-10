@@ -4640,7 +4640,7 @@ static bool wm_event_touch_navigate(bContext *C, wmEvent *event, ARegion *region
   {
     return false;
   }
-  if ((BLENDER_VISIONOS_touch_navigation() &
+  if ((BLENDER_VISIONOS_touch_navigation_effective() &
        (BLENDER_VISIONOS_TOUCH_NAV_EMPTY_ORBIT | BLENDER_VISIONOS_TOUCH_NAV_DRAG_PAN)) == 0)
   {
     return false;

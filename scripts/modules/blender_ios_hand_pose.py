@@ -2,15 +2,16 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-"""Hand-pose navigation for the Vision Pro window 3D viewport.
+"""Hand-pose detection for the Vision Pro window 3D viewport.
 
 Peace sign (index + middle extended, ring + little curled, thumb not pinching) on either
-hand switches one-finger viewport drags to pan
-(:func:`blender_ios_touch_nav.set_drag_pan_override`) for as long as the pose is held.
+hand is detected and exposed through :func:`pose_detected`.
 
 Finger tips come from RealityKit hand joint anchors published through
 :mod:`blender_visionos._native` (no extra ARKit session), so the pose is only seen while
-an Immersive Space tracks the hands.
+an Immersive Space tracks the hands. Planar viewport pan is disabled while Immersive is
+open, so the pose never switches drags to pan
+(:func:`blender_ios_touch_nav.set_drag_pan_override` stays off).
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ PINCH_MAX = 0.5
 ENGAGE_FRAMES = 3
 RELEASE_FRAMES = 4
 
-_state = {"enabled": True, "override": False, "registered": False}
+_state = {"enabled": True, "override": False, "pose": False, "registered": False}
 
 
 def _dist(a, b) -> float:
@@ -126,21 +127,27 @@ def _set_override(value: bool) -> None:
 
 
 def update_from_snapshot(snap) -> bool:
-    """Feed one hand snapshot; returns whether pan override is active."""
+    """Feed one hand snapshot; returns whether the peace pose is held."""
+    _set_override(False)
     if not _state["enabled"] or not getattr(snap, "immersive_active", 0):
         for det in _detectors.values():
             det.reset()
-        _set_override(False)
+        _state["pose"] = False
         return False
-    active = False
+    pose = False
     for name in ("left", "right"):
-        active |= _detectors[name].update(getattr(snap, name))
-    _set_override(active)
-    return active
+        pose |= _detectors[name].update(getattr(snap, name))
+    _state["pose"] = pose
+    return pose
 
 
 def is_active() -> bool:
+    """Whether the pose currently overrides viewport drags (never while Immersive is open)."""
     return _state["override"]
+
+
+def pose_detected() -> bool:
+    return _state["pose"]
 
 
 def set_enabled(value: bool) -> None:

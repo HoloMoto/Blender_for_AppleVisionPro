@@ -59,6 +59,21 @@ extern "C" uint32_t BLENDER_VISIONOS_touch_navigation(void)
   return g_touch_navigation.load();
 }
 
+extern "C" uint32_t BLENDER_VISIONOS_touch_navigation_effective(void)
+{
+  uint32_t flags = g_touch_navigation.load();
+  bool immersive_active = false;
+  {
+    std::lock_guard lock(g_visionos_mutex);
+    immersive_active = g_immersive_active;
+  }
+  if (immersive_active) {
+    flags &= ~uint32_t(BLENDER_VISIONOS_TOUCH_NAV_TWO_FINGER_PAN |
+                       BLENDER_VISIONOS_TOUCH_NAV_DRAG_PAN);
+  }
+  return flags;
+}
+
 static void wm_ios_visionos_world_mesh_clear()
 {
   std::lock_guard lock(g_world_mesh_mutex);

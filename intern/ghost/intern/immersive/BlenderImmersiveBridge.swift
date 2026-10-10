@@ -409,6 +409,28 @@ public final class BlenderImmersiveBridge: NSObject {
     #endif
   }
 
+  /** Reset Immersive placement, hold and view scale to the default origin; returns status. */
+  @objc(spatialResetOrigin)
+  public static func spatialResetOrigin() -> String {
+    #if os(visionOS)
+      var text = ""
+      let run = {
+        MainActor.assumeIsolated {
+          text = BlenderImmersiveSpatialHold.shared.resetOrigin()
+        }
+      }
+      if Thread.isMainThread {
+        run()
+      }
+      else {
+        DispatchQueue.main.sync(execute: run)
+      }
+      return text
+    #else
+      return "unavailable"
+    #endif
+  }
+
   /** Smoke-only spatial debug hook (see VP-159 spec D). */
   @objc(debugSpatialAction:a:b:c:)
   public static func debugSpatial(_ action: Int32, a: Float, b: Float, c: Float) -> String {

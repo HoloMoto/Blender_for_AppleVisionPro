@@ -74,6 +74,8 @@ void GHOST_Vision_update_brush_preview(bool visible,
                                        int kind);
 /** Smoke-test hook for spatial hold / scale / preview. Writes a status line into r_buf. */
 void GHOST_Vision_debug_spatial(int action, float a, float b, float c, char *r_buf, int buf_len);
+/** Reset Immersive placement / hold / view scale to the default origin (status in r_buf). */
+void GHOST_Vision_spatial_reset_origin(char *r_buf, int buf_len);
 
 /** Speaker objects → RealityKit SpatialAudio (AUDASPACE off on visionOS). */
 void GHOST_Vision_speakers_begin(void);

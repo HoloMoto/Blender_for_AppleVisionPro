@@ -119,12 +119,13 @@ _FN_WORLD_MESH_COPY = None
 _FN_VIEWER = None
 _FN_TOUCH_NAV_GET = None
 _FN_TOUCH_NAV_SET = None
+_FN_TOUCH_NAV_EFFECTIVE = None
 
 
 def _lib():
     global _LIB, _FN_AVAILABLE, _FN_CAPS, _FN_HAND
     global _FN_WORLD_MESH_META, _FN_WORLD_MESH_COPY, _FN_VIEWER
-    global _FN_TOUCH_NAV_GET, _FN_TOUCH_NAV_SET
+    global _FN_TOUCH_NAV_GET, _FN_TOUCH_NAV_SET, _FN_TOUCH_NAV_EFFECTIVE
     if _LIB is not None:
         return _LIB
     lib = _load_lib()
@@ -178,6 +179,13 @@ def _lib():
         # Pre-TF-158 hosts — window touch navigation is fixed (two-finger orbit).
         _FN_TOUCH_NAV_GET = None
         _FN_TOUCH_NAV_SET = None
+    try:
+        lib.BLENDER_VISIONOS_touch_navigation_effective.restype = c_uint32
+        lib.BLENDER_VISIONOS_touch_navigation_effective.argtypes = []
+        _FN_TOUCH_NAV_EFFECTIVE = lib.BLENDER_VISIONOS_touch_navigation_effective
+    except AttributeError:
+        # Pre-TF-160 hosts — pan bits are not masked in Immersive.
+        _FN_TOUCH_NAV_EFFECTIVE = None
     _LIB = lib
     return _LIB
 
@@ -259,6 +267,13 @@ def touch_navigation() -> int:
     if not touch_navigation_available():
         return -1
     return int(_FN_TOUCH_NAV_GET())
+
+
+def touch_navigation_effective() -> int:
+    """Flags navigation honours (pan bits masked while Immersive is open), -1 if unsupported."""
+    if not touch_navigation_available() or _FN_TOUCH_NAV_EFFECTIVE is None:
+        return -1
+    return int(_FN_TOUCH_NAV_EFFECTIVE())
 
 
 def set_touch_navigation(flags: int) -> bool:

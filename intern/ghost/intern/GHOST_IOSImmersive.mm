@@ -218,6 +218,18 @@ extern "C" void GHOST_IOS_immersive_debug_spatial(
   GHOST_Vision_debug_spatial(action, a, b, c, r_buf, buf_len);
 }
 
+extern "C" bool GHOST_IOS_immersive_reset_origin(char *r_buf, const int buf_len)
+{
+  if (r_buf != nullptr && buf_len > 0) {
+    r_buf[0] = '\0';
+  }
+  if (!GHOST_Vision_immersive_space_is_active()) {
+    return false;
+  }
+  GHOST_Vision_spatial_reset_origin(r_buf, buf_len);
+  return true;
+}
+
 extern "C" void GHOST_IOS_immersive_speakers_begin(void)
 {
   /* AUDASPACE is OFF — Speaker audio must work windowed and Immersive. */

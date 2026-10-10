@@ -3,14 +3,19 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 /**
- * Spatial-only Immersive features (TF-159):
- * - Two-hand hold: left pinch grabs the scene (move + yaw), both hands add scale.
- * - Real-scale toggle (1:1 ↔ desk) + reset.
+ * Spatial-only Immersive features (TF-159, reworked TF-160):
+ * - Two-hand hold (opt-in): both hands pinch and hold still briefly, then the scene follows
+ *   the midpoint (move), the inter-hand direction (yaw) and distance (scale).
+ * - Real-scale toggle (1:1 ↔ desk), hold reset and full origin reset.
  * - Brush preview (ring / disc / normal needle) driven by native sculpt hits.
  *
  * worldRoot.transform = T(placement + holdTranslation) * R(holdYaw) * S(viewScale).
  * Hand input uses RealityKit hand AnchorEntities only — never a second ARKitSession
  * (TF-134 crash type). Disabled while the spectator WorldAnchor is locked.
+ *
+ * Window interactions (look + pinch) are also pinches, so a one-hand grab moved the scene
+ * whenever a window was dragged (TF-159 jitter). Hold therefore needs both hands, filters
+ * the hand input, ignores sub-deadzone motion and never writes the root while idle.
  */
 
 import Foundation
@@ -29,10 +34,10 @@ import simd
     static let shared = BlenderImmersiveSpatialHold()
 
     /* Published values change only on discrete events (UI re-renders steal pinches). */
-    @Published private(set) var holdEnabled = true
+    @Published private(set) var holdEnabled = false
     @Published private(set) var isRealScale = true
     @Published private(set) var displayScale: Float = 1
-    @Published private(set) var statusText = "ホールド: 待機"
+    @Published private(set) var statusText = "ホールド: OFF"
 
     /** Pushed by the space view (palm-facing Hand Menu / interactive Mat board). */
     var handMenuVisible = false
@@ -40,10 +45,11 @@ import simd
     weak var musePen: BlenderImmersiveMusePenController?
 
     private weak var worldRoot: Entity?
+    /** Smoke-only stand-in for the RealityView root (simulator never binds one). */
+    private var testRoot: Entity?
     private var handRoot: Entity?
     private var leftThumb: AnchorEntity?
     private var leftIndex: AnchorEntity?
-    private var leftPalm: AnchorEntity?
     private var rightThumb: AnchorEntity?
     private var rightIndex: AnchorEntity?
 
@@ -52,6 +58,8 @@ import simd
     private var holdYaw: Float = 0
     private var viewScale: Float = 1
     private var lastSentScale: Float = 1
+    /** Number of frames that actually changed the root transform (smoke observability). */
+    private(set) var writeCount = 0
 
     private enum GrabSource {
       case hand
@@ -70,20 +78,36 @@ import simd
       var startScale: Float
     }
 
+    struct HandFrame {
+      var leftTracked: Bool
+      var rightTracked: Bool
+      var leftThumb: SIMD3<Float>
+      var leftIndex: SIMD3<Float>
+      var rightThumb: SIMD3<Float>
+      var rightIndex: SIMD3<Float>
+    }
+
     private var grab: Grab?
     private var leftPinching = false
     private var rightPinching = false
-    private var leftPinchStart: Date?
-    private var leftPinchStartPos = SIMD3<Float>.zero
-    private var lastHandYaw: Float = 0
+    private var bothSince: TimeInterval?
+    private var lastStepTime: TimeInterval?
+    private var filtPivot = SIMD3<Float>.zero
+    private var filtYaw: Float = 0
+    private var filtDist: Float = 0
     private var wasAligned = false
     private var sampleTask: Task<Void, Never>?
     private var bindGeneration: UInt = 0
 
     private let pinchThreshold: Float = 0.028
     private let pinchRelease: Float = 0.038
-    private let engageSeconds: TimeInterval = 0.25
-    private let engageDistance: Float = 0.01
+    /** Both hands must pinch this long before the scene follows. */
+    private let engageSeconds: TimeInterval = 0.35
+    /** Low-pass time constant for the hand pivot / yaw / distance. */
+    private let filterTau: Float = 0.08
+    private let moveDeadzone: Float = 0.008
+    private let yawDeadzone: Float = 0.05
+    private let scaleDeadzone: Float = 0.04
     private let minScale: Float = 0.05
     private let maxScale: Float = 20
 
@@ -99,6 +123,7 @@ import simd
 
     func bind(worldRoot root: Entity, handParent: Entity, placementBase base: SIMD3<Float>) {
       unbind()
+      testRoot = nil
       worldRoot = root
       placementBase = base
       bindGeneration &+= 1
@@ -120,7 +145,6 @@ import simd
       }
       leftThumb = anchor(.left, .thumbTip, "HoldLThumb")
       leftIndex = anchor(.left, .indexFingerTip, "HoldLIndex")
-      leftPalm = anchor(.left, .palm, "HoldLPalm")
       rightThumb = anchor(.right, .thumbTip, "HoldRThumb")
       rightIndex = anchor(.right, .indexFingerTip, "HoldRIndex")
 
@@ -146,19 +170,20 @@ import simd
       handRoot = nil
       leftThumb = nil
       leftIndex = nil
-      leftPalm = nil
       rightThumb = nil
       rightIndex = nil
       grab = nil
       leftPinching = false
       rightPinching = false
-      leftPinchStart = nil
+      bothSince = nil
+      lastStepTime = nil
       if worldRoot != nil {
         /* Native strokes outside Immersive use 1:1. Restored on next bind. */
         WM_IOS_immersive_set_view_scale(1)
         lastSentScale = 1
       }
       worldRoot = nil
+      testRoot = nil
     }
 
     /**
@@ -168,18 +193,46 @@ import simd
     func applyPlacement(base: SIMD3<Float>, to root: Entity) {
       placementBase = base
       if root !== worldRoot || isAligned {
-        root.position = base
+        if root.position != base {
+          root.position = base
+        }
         return
       }
       applyComposite()
     }
 
+    /** Writes the root only when the composed transform differs from what it holds. */
     private func applyComposite() {
       guard let root = worldRoot, !isAligned else { return }
-      root.position = placementBase + holdTranslation
-      root.orientation = simd_quatf(angle: holdYaw, axis: SIMD3<Float>(0, 1, 0))
-      root.scale = SIMD3<Float>(repeating: viewScale)
+      let position = placementBase + holdTranslation
+      let orientation = simd_quatf(angle: holdYaw, axis: SIMD3<Float>(0, 1, 0))
+      let scale = SIMD3<Float>(repeating: viewScale)
+      var wrote = false
+      if simd_length(root.position - position) > 1.0e-5 {
+        root.position = position
+        wrote = true
+      }
+      if Self.angleBetween(root.orientation, orientation) > 1.0e-4 {
+        root.orientation = orientation
+        wrote = true
+      }
+      if simd_length(root.scale - scale) > 1.0e-5 {
+        root.scale = scale
+        wrote = true
+      }
+      if wrote {
+        writeCount &+= 1
+      }
       sendScale(force: false)
+    }
+
+    private static func angleBetween(_ a: simd_quatf, _ b: simd_quatf) -> Double {
+      let va = a.vector
+      let vb = b.vector
+      let dot =
+        Double(va.x) * Double(vb.x) + Double(va.y) * Double(vb.y) + Double(va.z) * Double(vb.z)
+        + Double(va.w) * Double(vb.w)
+      return 2 * acos(min(1, abs(dot)))
     }
 
     private func sendScale(force: Bool) {
@@ -200,6 +253,11 @@ import simd
       if statusText != text { statusText = text }
     }
 
+    private var idleStatus: String {
+      if isAligned { return "ホールド: iPad合わせ中は無効" }
+      return holdEnabled ? "ホールド: 待機（両手ピンチ）" : "ホールド: OFF"
+    }
+
     // MARK: - Grab (shared by hand loop and debug hook)
 
     @discardableResult
@@ -216,8 +274,19 @@ import simd
         startPosition: placementBase + holdTranslation,
         startYaw: holdYaw,
         startScale: viewScale)
-      setStatus(twoHand ? "ホールド: 両手（移動・回転・拡縮）" : "ホールド: 片手（移動・回転）")
+      setStatus(twoHand ? "ホールド: 両手（移動・回転・拡縮）" : "ホールド: 片手（移動）")
       return true
+    }
+
+    /** Motion inside the deadzone is ignored; outside it, only the excess applies (no jump). */
+    private static func soft(_ v: Float, _ dz: Float) -> Float {
+      let m = abs(v)
+      return m <= dz ? 0 : (v > 0 ? m - dz : dz - m)
+    }
+
+    private static func soft(_ v: SIMD3<Float>, _ dz: Float) -> SIMD3<Float> {
+      let m = simd_length(v)
+      return m <= dz ? .zero : v * ((m - dz) / m)
     }
 
     private func moveGrab(pivotWorld: SIMD3<Float>, yaw: Float, dist: Float) {
@@ -226,15 +295,22 @@ import simd
         endGrab()
         return
       }
-      let pivot = parentSpace(pivotWorld, root: root)
-      let dYaw = Self.wrapAngle(yaw - g.refYaw)
-      var newScale = g.startScale
+      let filtered = g.source == .hand
+      var delta = parentSpace(pivotWorld, root: root) - g.pivot
+      var dYaw = Self.wrapAngle(yaw - g.refYaw)
+      var logRatio: Float = 0
       if g.twoHand {
-        newScale = min(max(g.startScale * (dist / g.refDist), minScale), maxScale)
+        logRatio = log(max(dist, 0.01) / g.refDist)
       }
+      if filtered {
+        delta = Self.soft(delta, moveDeadzone)
+        dYaw = Self.soft(dYaw, yawDeadzone)
+        logRatio = Self.soft(logRatio, scaleDeadzone)
+      }
+      let newScale = min(max(g.startScale * exp(logRatio), minScale), maxScale)
       let ratio = newScale / max(g.startScale, 1.0e-4)
       let rot = simd_quatf(angle: dYaw, axis: SIMD3<Float>(0, 1, 0))
-      let position = pivot + rot.act((g.startPosition - g.pivot) * ratio)
+      let position = g.pivot + delta + rot.act((g.startPosition - g.pivot) * ratio)
       guard position.x.isFinite, position.y.isFinite, position.z.isFinite else { return }
       holdTranslation = position - placementBase
       holdYaw = Self.wrapAngle(g.startYaw + dYaw)
@@ -246,7 +322,7 @@ import simd
       guard grab != nil else { return }
       grab = nil
       publishState()
-      setStatus(isAligned ? "ホールド: iPad合わせ中は無効" : "ホールド: 待機")
+      setStatus(idleStatus)
     }
 
     private func parentSpace(_ world: SIMD3<Float>, root: Entity) -> SIMD3<Float> {
@@ -266,7 +342,7 @@ import simd
     /** Yaw about +Y (RealityKit up) of a horizontal direction: R_y(θ)·(1,0,0) = v. */
     private static func yawOf(_ v: SIMD3<Float>) -> Float? {
       let h = SIMD2<Float>(v.x, v.z)
-      guard simd_length(h) > 1.0e-4 else { return nil }
+      guard simd_length(h) > 0.05 else { return nil }
       return atan2(-v.z, v.x)
     }
 
@@ -298,99 +374,83 @@ import simd
         if aligned {
           /* Protect MRC alignment: drop hold / scale entirely. */
           grab = nil
+          bothSince = nil
           holdTranslation = .zero
           holdYaw = 0
           viewScale = 1
           worldRoot?.scale = SIMD3<Float>(repeating: 1)
           sendScale(force: true)
           publishState()
-          setStatus("ホールド: iPad合わせ中は無効")
         }
         else {
           applyComposite()
           sendScale(force: true)
-          setStatus("ホールド: 待機")
         }
+        setStatus(idleStatus)
       }
 
-      guard let lt = leftThumb, let li = leftIndex, let lp = leftPalm,
-        let rt = rightThumb, let ri = rightIndex
+      guard let lt = leftThumb, let li = leftIndex, let rt = rightThumb, let ri = rightIndex
       else { return }
+      let frame = HandFrame(
+        leftTracked: lt.isAnchored && li.isAnchored,
+        rightTracked: rt.isAnchored && ri.isAnchored,
+        leftThumb: lt.position(relativeTo: nil),
+        leftIndex: li.position(relativeTo: nil),
+        rightThumb: rt.position(relativeTo: nil),
+        rightIndex: ri.position(relativeTo: nil))
+      step(frame, now: Date().timeIntervalSinceReferenceDate)
+    }
 
-      let leftTracked = lt.isAnchored && li.isAnchored
-      let lThumb = lt.position(relativeTo: nil)
-      let lIndex = li.position(relativeTo: nil)
-      let leftPoint = (lThumb + lIndex) * 0.5
-      leftPinching = updatePinch(leftPinching, tracked: leftTracked, a: lThumb, b: lIndex)
-
-      let rightTracked = rt.isAnchored && ri.isAnchored
-      let rThumb = rt.position(relativeTo: nil)
-      let rIndex = ri.position(relativeTo: nil)
-      let rightPoint = (rThumb + rIndex) * 0.5
-      rightPinching = updatePinch(rightPinching, tracked: rightTracked, a: rThumb, b: rIndex)
-
-      if lp.isAnchored {
-        let m = lp.transformMatrix(relativeTo: nil)
-        let xAxis = SIMD3<Float>(m.columns.0.x, m.columns.0.y, m.columns.0.z)
-        if simd_length(SIMD2<Float>(xAxis.x, xAxis.z)) > 0.3, let yaw = Self.yawOf(xAxis) {
-          lastHandYaw = yaw
-        }
-      }
-
-      let now = Date()
-      if leftPinching {
-        if leftPinchStart == nil {
-          leftPinchStart = now
-          leftPinchStartPos = leftPoint
-        }
-      }
-      else {
-        leftPinchStart = nil
-      }
+    /** One hand sample. Writes the root only while a two-hand hold is engaged. */
+    private func step(_ f: HandFrame, now: TimeInterval) {
+      leftPinching = updatePinch(
+        leftPinching, tracked: f.leftTracked, a: f.leftThumb, b: f.leftIndex)
+      rightPinching = updatePinch(
+        rightPinching, tracked: f.rightTracked, a: f.rightThumb, b: f.rightIndex)
+      let dt = Float(min(max(now - (lastStepTime ?? now), 0), 0.1))
+      lastStepTime = now
 
       /* Debug-sourced grabs are driven only by debugSpatial. */
       if let g = grab, g.source == .debug {
         return
       }
 
-      let blocked = !holdEnabled || aligned || handMenuVisible || uiBlocked
-      if !leftPinching || blocked {
+      let museDown = musePen?.isTipDown ?? false
+      let blocked =
+        !holdEnabled || isAligned || handMenuVisible || uiBlocked
+        || BlenderImmersiveState.shared.useHandAsPen || museDown
+      guard leftPinching, rightPinching, !blocked else {
+        bothSince = nil
         endGrab()
         return
       }
 
-      let museUp = !(musePen?.isTipDown ?? false)
-      let twoHand = rightPinching && !BlenderImmersiveState.shared.useHandAsPen && museUp
-
-      let pivot: SIMD3<Float>
-      let yaw: Float
-      let dist: Float
-      if twoHand {
-        pivot = (leftPoint + rightPoint) * 0.5
-        yaw = Self.yawOf(rightPoint - leftPoint) ?? (grab?.refYaw ?? 0)
-        dist = simd_length(rightPoint - leftPoint)
+      let l = (f.leftThumb + f.leftIndex) * 0.5
+      let r = (f.rightThumb + f.rightIndex) * 0.5
+      let rawPivot = (l + r) * 0.5
+      let rawDist = simd_length(r - l)
+      if bothSince == nil {
+        bothSince = now
+        filtPivot = rawPivot
+        filtYaw = Self.yawOf(r - l) ?? 0
+        filtDist = rawDist
       }
       else {
-        pivot = leftPoint
-        yaw = lastHandYaw
-        dist = 0
+        let alpha = 1 - exp(-dt / filterTau)
+        filtPivot += (rawPivot - filtPivot) * alpha
+        if let rawYaw = Self.yawOf(r - l) {
+          filtYaw = Self.wrapAngle(filtYaw + Self.wrapAngle(rawYaw - filtYaw) * alpha)
+        }
+        filtDist += (rawDist - filtDist) * alpha
       }
 
-      if let g = grab {
-        if g.twoHand != twoHand {
-          /* Re-base on one↔two-hand switch so the scene does not jump. */
-          beginGrab(source: .hand, twoHand: twoHand, pivotWorld: pivot, refYaw: yaw, refDist: dist)
-        }
-        else {
-          moveGrab(pivotWorld: pivot, yaw: yaw, dist: dist)
-        }
+      if grab == nil {
+        guard let since = bothSince, now - since >= engageSeconds else { return }
+        beginGrab(
+          source: .hand, twoHand: true, pivotWorld: filtPivot, refYaw: filtYaw, refDist: filtDist)
         return
       }
-
-      guard let start = leftPinchStart, now.timeIntervalSince(start) >= engageSeconds,
-        simd_length(leftPoint - leftPinchStartPos) > engageDistance
-      else { return }
-      beginGrab(source: .hand, twoHand: twoHand, pivotWorld: pivot, refYaw: yaw, refDist: dist)
+      moveGrab(pivotWorld: filtPivot, yaw: filtYaw, dist: filtDist)
     }
 
     // MARK: - Scale / reset
@@ -400,8 +460,9 @@ import simd
       holdEnabled = enabled
       if !enabled {
         grab = nil
+        bothSince = nil
       }
-      setStatus(enabled ? "ホールド: 待機" : "ホールド: OFF")
+      setStatus(idleStatus)
     }
 
     func toggleRealScale() {
@@ -414,8 +475,10 @@ import simd
       setStatus(abs(target - 1) < 0.001 ? "表示: 1:1" : String(format: "表示: 卓上 ×%.2f", target))
     }
 
+    /** Clears hold move / yaw / scale; keeps the placement offset. */
     func reset() {
       grab = nil
+      bothSince = nil
       holdTranslation = .zero
       holdYaw = 0
       viewScale = 1
@@ -423,6 +486,26 @@ import simd
       sendScale(force: false)
       publishState()
       setStatus(isAligned ? "ホールド: iPad合わせ中は無効" : "ホールド: リセット")
+    }
+
+    /**
+     * Back to the default origin: hold + view scale + placement offset (Space tab sliders).
+     * While the spectator origin is locked the scene stays on the locked WorldAnchor; only
+     * the offsets are cleared so unlocking does not jump.
+     */
+    @discardableResult
+    func resetOrigin() -> String {
+      reset()
+      let state = BlenderImmersiveState.shared
+      if state.placementX != 0 || state.placementY != 0 || state.placementZ != 0 {
+        state.updatePlacement(x: 0, y: 0, z: 0)
+        NotificationCenter.default.post(name: .blenderImmersivePlacementChanged, object: nil)
+      }
+      placementBase = SIMD3<Float>(0, 0, -1.2)
+      applyComposite()
+      let text = isAligned ? "原点: iPad合わせ原点を維持（オフセット解除）" : "原点: リセット"
+      setStatus(text)
+      return text
     }
 
     private func setScaleKeepingFocus(_ target: Float, root: Entity) {
@@ -482,6 +565,86 @@ import simd
 
     // MARK: - Debug hook (spec D)
 
+    /** Deterministic noise for synthetic hand frames. */
+    private struct Noise {
+      var state: UInt64
+      mutating func next() -> Float {
+        state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        return Float((state >> 40) & 0xFFFFFF) / Float(0xFFFFFF) * 2 - 1
+      }
+      mutating func vec(_ amp: Float) -> SIMD3<Float> {
+        SIMD3<Float>(next(), next(), next()) * amp
+      }
+    }
+
+    /**
+     * Synthetic hands, 60 Hz. Scenario:
+     * 0 open hands, 1 peace pose (index/middle out, thumb away), 2 left pinch dragged 15 cm
+     * (old one-hand trigger / window drag), 3 both pinching and held still,
+     * 4 both pinching then moved 15 cm along +X.
+     * Returns root writes and how far the root moved.
+     */
+    private func runSynthetic(frames: Int, noise amp: Float, scenario: Int) -> String {
+      guard let root = worldRoot else { return "err nobind " + query() }
+      var rng = Noise(state: 0x9E37_79B9_7F4A_7C15 &+ UInt64(scenario))
+      let startPos = root.position
+      let startScale = root.scale.x
+      let startWrites = writeCount
+      var t = (lastStepTime ?? 0) + 1
+      let leftHome = SIMD3<Float>(-0.15, 1.1, -0.45)
+      let rightHome = SIMD3<Float>(0.15, 1.1, -0.45)
+      let pinchGap = SIMD3<Float>(0.012, 0, 0)
+      let openGap = SIMD3<Float>(0.07, 0.04, 0)
+      for i in 0..<max(frames, 1) {
+        t += 1.0 / 60.0
+        var lGap = openGap
+        var rGap = openGap
+        var lOff = SIMD3<Float>.zero
+        var rOff = SIMD3<Float>.zero
+        switch scenario {
+        case 1:
+          lGap = SIMD3<Float>(0.06, 0.08, 0.01)
+          rGap = lGap
+        case 2:
+          lGap = pinchGap
+          lOff = SIMD3<Float>(0.15 * Float(i) / Float(max(frames - 1, 1)), 0, 0)
+        case 3:
+          lGap = pinchGap
+          rGap = pinchGap
+        case 4:
+          lGap = pinchGap
+          rGap = pinchGap
+          let move = max(0, Float(i) - 40) / Float(max(frames - 41, 1))
+          lOff = SIMD3<Float>(0.15 * min(move, 1), 0, 0)
+          rOff = lOff
+        default:
+          break
+        }
+        let lBase = leftHome + lOff
+        let rBase = rightHome + rOff
+        let frame = HandFrame(
+          leftTracked: true,
+          rightTracked: true,
+          leftThumb: lBase + rng.vec(amp),
+          leftIndex: lBase + lGap + rng.vec(amp),
+          rightThumb: rBase + rng.vec(amp),
+          rightIndex: rBase + rGap + rng.vec(amp))
+        step(frame, now: t)
+      }
+      /* Release both hands. */
+      t += 1.0 / 60.0
+      step(
+        HandFrame(
+          leftTracked: false, rightTracked: false, leftThumb: .zero, leftIndex: .zero,
+          rightThumb: .zero, rightIndex: .zero),
+        now: t)
+      let moved = simd_length(root.position - startPos)
+      return query()
+        + String(
+          format: " writes=%d moved=%.4f dscale=%.4f",
+          writeCount - startWrites, moved, root.scale.x - startScale)
+    }
+
     func debug(action: Int32, a: Float, b: Float, c: Float) -> String {
       let p = SIMD3<Float>(a, b, c)
       switch action {
@@ -534,6 +697,30 @@ import simd
           dist: simd_length(r1 - l1))
         endGrab()
         return query() + String(format: " before=%.3f after=%.3f", before, viewScale)
+      case 9:
+        if worldRoot == nil {
+          let root = Entity()
+          root.name = "BlenderSpatialHoldSmokeRoot"
+          testRoot = root
+          worldRoot = root
+          placementBase = SIMD3<Float>(0, 0, -1.2)
+          applyComposite()
+        }
+      case 10:
+        return runSynthetic(frames: Int(a), noise: b, scenario: Int(c))
+      case 11:
+        setHoldEnabled(a > 0.5)
+      case 12:
+        return resetOrigin() + " " + query()
+      case 13:
+        if let test = testRoot, worldRoot === test {
+          unbind()
+        }
+      case 14:
+        BlenderImmersiveState.shared.updatePlacement(x: a, y: b, z: c)
+        if let root = worldRoot {
+          applyPlacement(base: SIMD3<Float>(a, b, -1.2 + c), to: root)
+        }
       default:
         return "err action=\(action) " + query()
       }
@@ -542,8 +729,10 @@ import simd
 
     private func query() -> String {
       let pos = worldRoot?.position ?? .zero
+      let state = BlenderImmersiveState.shared
       return String(
-        format: "ok bound=%d scale=%.3f pos=(%.3f,%.3f,%.3f) yaw=%.2f hold=%d preview=%d aligned=%d enabled=%d",
+        format:
+          "ok bound=%d scale=%.3f pos=(%.3f,%.3f,%.3f) yaw=%.2f hold=%d preview=%d aligned=%d enabled=%d test=%d writes=%d place=(%.3f,%.3f,%.3f)",
         worldRoot != nil ? 1 : 0,
         viewScale,
         pos.x, pos.y, pos.z,
@@ -551,7 +740,10 @@ import simd
         grab != nil ? 1 : 0,
         BlenderImmersiveBrushPreview.shared.isShowing ? 1 : 0,
         isAligned ? 1 : 0,
-        holdEnabled ? 1 : 0)
+        holdEnabled ? 1 : 0,
+        testRoot != nil ? 1 : 0,
+        writeCount,
+        state.placementX, state.placementY, state.placementZ)
     }
   }
 

@@ -22,7 +22,7 @@ Status
 |---|---|
 | Track | **Blender 5.0 line** (marketing `5.0.1`) |
 | Branch | **`immersive-space`** (remote `visionpro` → [HoloMoto/Blender_for_AppleVisionPro](https://github.com/HoloMoto/Blender_for_AppleVisionPro)) |
-| Latest TestFlight (Vision Pro) | **159** — spatial sculpt: Muse / hand pen drive Blender's real brush engine in 3D (all brushes, symmetry, undo), partial Live Mesh updates for high-poly, brush preview ring, two-hand hold, 1:1 ↔ desk scale, peace-pose pan; includes 158 touch navigation and 157 Preferences persistence |
+| Latest TestFlight (Vision Pro) | **160** — Immersive stability: fixes scene jitter from TF-159 (window pinch-drags no longer move the Immersive scene; two-hand hold reworked, off by default), planar pan off in Immersive, origin reset; includes 159 spatial sculpt, 158 touch navigation, 157 Preferences persistence |
 | 5.3 line | Paused (`immersive-space-53`). Not shipped until it launches as reliably as 5.0 |
 
 Experimental. Usable for development and testing on device; not a release build.
@@ -52,8 +52,9 @@ Features (visionOS)
   Snake Hook, Draw Sharp, Flatten; symmetry, auto-masking, one undo step per stroke),
   radius in world units, brush preview ring on the surface. The previous custom deform
   stays available via the Hand Menu engine toggle
-- Two-hand hold moves / rotates / scales the Immersive scene; Hand Menu toggles
-  **1:1 ↔ desk** scale; a peace pose turns one-finger window drag into pan
+- Hand Menu **1:1 ↔ desk** scale and **origin reset** (also N-panel / Window menu);
+  optional two-hand hold (off by default) moves / rotates / scales the Immersive scene.
+  Planar viewport pan is disabled while Immersive is open
 - Hand Menu (shown only when the palm faces the user), hand tracking API for add-ons
 - **Nomad-style touch navigation** in the window 3D Viewport (finger input only):
   two-finger drag pans, pinch zooms, one-finger drag starting on empty space orbits.

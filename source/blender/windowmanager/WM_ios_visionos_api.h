@@ -188,6 +188,12 @@ enum {
 void BLENDER_VISIONOS_set_touch_navigation(uint32_t flags);
 /** Current touch navigation flags, #BLENDER_VISIONOS_TOUCH_NAV_DEFAULT until changed. */
 uint32_t BLENDER_VISIONOS_touch_navigation(void);
+/**
+ * Flags navigation should honour: #BLENDER_VISIONOS_TOUCH_NAV_TWO_FINGER_PAN and
+ * #BLENDER_VISIONOS_TOUCH_NAV_DRAG_PAN are masked while the Immersive Space is open, so
+ * planar 3D-view pans never fire during Immersive work (two-finger drag orbits as before 158).
+ */
+uint32_t BLENDER_VISIONOS_touch_navigation_effective(void);
 
 #ifdef __cplusplus
 }

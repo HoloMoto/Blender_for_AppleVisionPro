@@ -381,7 +381,7 @@ static wmOperatorStatus viewrotate_invoke(bContext *C, wmOperator *op, const wmE
   }
   /* Two-finger drag pans (one-finger drag on empty space orbits, see #VIEW3D_OT_touch_orbit). */
   if ((event->type == MOUSEPAN) &&
-      (BLENDER_VISIONOS_touch_navigation() & BLENDER_VISIONOS_TOUCH_NAV_TWO_FINGER_PAN) &&
+      (BLENDER_VISIONOS_touch_navigation_effective() & BLENDER_VISIONOS_TOUCH_NAV_TWO_FINGER_PAN) &&
       view3d_location_poll(C))
   {
     return view3d_navigate_invoke_impl(C, op, event, &ViewOpsType_move);
@@ -485,7 +485,7 @@ static bool touch_orbit_geometry_under_cursor(bContext *C, const int mval[2], bo
 
 static wmOperatorStatus touch_orbit_invoke(bContext *C, wmOperator *op, const wmEvent *event)
 {
-  const uint32_t nav = BLENDER_VISIONOS_touch_navigation();
+  const uint32_t nav = BLENDER_VISIONOS_touch_navigation_effective();
   if (nav & BLENDER_VISIONOS_TOUCH_NAV_DRAG_PAN) {
     if (!view3d_location_poll(C)) {
       return OPERATOR_PASS_THROUGH;

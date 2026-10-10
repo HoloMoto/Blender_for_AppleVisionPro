@@ -230,14 +230,15 @@ import SwiftUI
         .frame(maxWidth: .infinity, minHeight: 36)
         .tint(spatialHold.isRealScale ? .gray.opacity(0.5) : .teal.opacity(0.85))
 
-        Button("リセット") {
-          spatialHold.reset()
+        Button("原点リセット") {
+          spatialHold.resetOrigin()
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
         .frame(maxWidth: .infinity, minHeight: 36)
+        .tint(.orange.opacity(0.85))
       }
-      Button(spatialHold.holdEnabled ? "ホールド ON" : "ホールド OFF") {
+      Button(spatialHold.holdEnabled ? "両手ホールド ON" : "両手ホールド OFF") {
         spatialHold.setHoldEnabled(!spatialHold.holdEnabled)
       }
       .buttonStyle(.bordered)
