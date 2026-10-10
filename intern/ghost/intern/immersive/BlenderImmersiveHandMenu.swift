@@ -101,6 +101,7 @@ import SwiftUI
     /** 0 legacy custom deform, 1 Blender brush engine. */
     @State private var sculptEngine: Int32 = 1
     @ObservedObject private var spatialHold = BlenderImmersiveSpatialHold.shared
+    @ObservedObject private var museMenu = BlenderImmersiveMuseMarkingMenu.shared
 
     var body: some View {
       HStack(alignment: .top, spacing: 8) {
@@ -131,7 +132,7 @@ import SwiftUI
           Spacer(minLength: 0)
         }
         .padding(8)
-        .frame(width: 78, height: matMode ? 360 : 380)
+        .frame(width: 78, height: matMode ? 360 : 420)
         .glassBackgroundEffect()
 
         VStack(alignment: .leading, spacing: 8) {
@@ -144,7 +145,7 @@ import SwiftUI
           Spacer(minLength: 0)
         }
         .padding(12)
-        .frame(width: matMode ? 240 : 210, height: matMode ? 360 : 380, alignment: .topLeading)
+        .frame(width: matMode ? 240 : 210, height: matMode ? 360 : 420, alignment: .topLeading)
         .glassBackgroundEffect()
       }
       .onAppear(perform: syncFromState)
@@ -214,7 +215,30 @@ import SwiftUI
         .tint(sculptEngine == 0 ? .gray.opacity(0.5) : .indigo.opacity(0.85))
       }
 
+      museMenuHoldControls
       spatialControls
+    }
+
+    /** Muse button hold time before the brush marking menu opens (TF-161). */
+    @ViewBuilder private var museMenuHoldControls: some View {
+      let hold = museMenu.holdSeconds
+      HStack(spacing: 4) {
+        Button("−") {
+          museMenu.setHoldSeconds(max(0.5, hold - 0.5))
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        Text(String(format: "メニュー長押し %.1f秒", hold))
+          .font(.caption2.monospacedDigit())
+          .lineLimit(1)
+          .minimumScaleFactor(0.7)
+          .frame(maxWidth: .infinity)
+        Button("+") {
+          museMenu.setHoldSeconds(min(10, hold + 0.5))
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+      }
     }
 
     /** Spatial hold / view scale (TF-159). */

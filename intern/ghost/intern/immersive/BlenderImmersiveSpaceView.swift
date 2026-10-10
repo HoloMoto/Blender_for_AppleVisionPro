@@ -479,7 +479,6 @@ import simd
     @State private var handMenuPalmFacing = false
     @State private var handMenuEntityRef: Entity?
     @State private var handMenuPalmTask: Task<Void, Never>?
-    @State private var musePieVisible = BlenderImmersiveState.shared.musePieVisible
     @State private var musePieRoot = Entity()
     @State private var musePieConfigured = false
     @StateObject private var objectSync = BlenderImmersiveObjectSync()
@@ -537,24 +536,13 @@ import simd
       pieEntity.orientation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
       pieEntity.components.set(BillboardComponent())
       pieEntity.position = .zero
-      pieEntity.scale = SIMD3(repeating: 0.85)
+      pieEntity.scale = SIMD3(repeating: 1)
       musePieConfigured = true
-      updateMusePiePlacement()
-    }
-
-    private func updateMusePiePlacement() {
-      guard musePieVisible else {
-        musePieRoot.isEnabled = false
-        return
-      }
-      musePieRoot.isEnabled = true
-      let b = SIMD3(
-        BlenderImmersiveState.shared.musePieX,
-        BlenderImmersiveState.shared.musePieY,
-        BlenderImmersiveState.shared.musePieZ)
-      /* Slightly toward the wearer so the pie is not buried in the tip sphere. */
-      let rk = BlenderImmersiveCoords.blenderToRealityKit(b)
-      musePieRoot.position = rk + SIMD3(0, 0.05, 0.08)
+      let menu = BlenderImmersiveMuseMarkingMenu.shared
+      let pose = viewerPose
+      menu.headProvider = { pose.headWorldPosition }
+      menu.restoreSavedHold()
+      menu.bind(menuRoot: musePieRoot)
     }
 
     /** Split out of RealityView `update:` — keeps the type-checker from timing out. */
@@ -593,9 +581,6 @@ import simd
       }
       if !musePieConfigured, let pieEntity = attachments.entity(for: "musePie") {
         configureMusePieEntity(pieEntity)
-      }
-      else {
-        updateMusePiePlacement()
       }
     }
 
@@ -695,7 +680,7 @@ import simd
             radius: $handMenuRadius)
         }
         Attachment(id: "musePie") {
-          BlenderImmersiveMusePieMenu(visible: $musePieVisible)
+          BlenderImmersiveMusePieMenu()
         }
       }
       /* Stable id: do NOT include modelRevision — remaking the RealityView on
@@ -802,10 +787,6 @@ import simd
         handMenuRadius = BlenderImmersiveState.shared.handMenuRadius
         handMenuBrushLabel = BlenderImmersiveState.shared.handMenuBrushLabel
         handMenuDyntopo = BlenderImmersiveState.shared.handMenuDyntopo
-      }
-      .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveMusePieChanged)) { _ in
-        musePieVisible = BlenderImmersiveState.shared.musePieVisible
-        updateMusePiePlacement()
       }
       .onReceive(NotificationCenter.default.publisher(for: .blenderImmersiveBonesChanged)) { _ in
         bonePacked = BlenderImmersiveState.shared.bonePacked

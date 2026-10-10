@@ -59,8 +59,7 @@ import simd
     /** Counts inputStateAvailableHandler wakes (diagnostics). */
     private var handlerWakeCount = 0
     private var queuedStateCount = 0
-    /** Primary (select) button knock gesture — single/double/triple within window. */
-    private var lastPrimaryDown = false
+    /** Primary (select) button knock gesture — single/double/triple short taps. */
     private var knockTapCount = 0
     private var knockDeadline: Date?
     private let knockWindowSeconds: TimeInterval = 0.35
@@ -102,7 +101,7 @@ import simd
       secondaryPressedByStylus.removeAll()
       primaryPressureByStylus.removeAll()
       secondaryPressureByStylus.removeAll()
-      lastPrimaryDown = false
+      BlenderImmersiveMuseMarkingMenu.shared.reset()
       knockTapCount = 0
       knockDeadline = nil
       isTipDown = false
@@ -419,39 +418,8 @@ import simd
       tipPressure = outP
       logTipTransitionIfNeeded(pressed: drawDown, pressure: tipPressure, source: source)
 
-      /* Rising edge of primary (select / 筆圧ではないボタン):
-       * - tip far from mesh → Muse brush pie menu
-       * - tip near mesh → knock shortcuts (1/2/3 taps) as before */
-      if read.primDown && !lastPrimaryDown {
-        let near = BlenderImmersiveState.shared.museNearMeshDist
-        let radius = max(BlenderImmersiveState.shared.handMenuRadius, 0.05)
-        let farGate = max(0.12, radius * 2.0)
-        let far = !near.isFinite || near >= farGate
-        let mode = BlenderImmersiveState.shared.handMenuMode
-        if far && (mode == 2 || mode == 3 || mode == 0) {
-          knockTapCount = 0
-          knockDeadline = nil
-          let x = self.lastTipBlender.x
-          let y = self.lastTipBlender.y
-          let z = self.lastTipBlender.z
-          BlenderImmersiveState.shared.setMusePieVisible(true, x: x, y: y, z: z)
-          let msg = String(
-            format: "muse pie OPEN far dist=%.3f gate=%.3f mode=%d", near, farGate, mode)
-          print("[immersive] \(msg)")
-          BlenderIOSDiagnosticLog.bootSwiftOnly(msg)
-        }
-        else if BlenderImmersiveState.shared.musePieVisible {
-          BlenderImmersiveState.shared.setMusePieVisible(false, x: 0, y: 0, z: 0)
-        }
-        else {
-          knockTapCount = min(knockTapCount + 1, 3)
-          knockDeadline = Date().addingTimeInterval(knockWindowSeconds)
-          let msg = "muse knock tap=\(knockTapCount) (window \(knockWindowSeconds)s) near=\(near)"
-          print("[immersive] \(msg)")
-          BlenderIOSDiagnosticLog.bootSwiftOnly(msg)
-        }
-      }
-      lastPrimaryDown = read.primDown
+      /* Primary (select) button: marking menu / knock — handled per pose tick
+       * (BlenderImmersiveMuseMarkingMenu), never on the press edge. */
 
       if changed || source.hasPrefix("handler") || source.hasPrefix("element") {
         let msg = String(
@@ -564,11 +532,6 @@ import simd
               aimBlender = .zero
             }
             self.lastTipBlender = blender
-            /* Keep pie anchored on the tip while open. */
-            if BlenderImmersiveState.shared.musePieVisible {
-              BlenderImmersiveState.shared.setMusePieVisible(
-                true, x: blender.x, y: blender.y, z: blender.z)
-            }
 
             /*
              * Drain nextInputState every pose tick (Apple Drawing sample).
@@ -598,9 +561,24 @@ import simd
             /* Use latest sensor snapshot each tick — do not rely solely on isTipDown
              * which can lag one handler frame behind tip contact. */
             let rawDraw = tipSensor || secondary || self.isTipDown
-            let drawDown = viewOnly ? false : rawDraw
+            let menu = BlenderImmersiveMuseMarkingMenu.shared
+            let tipWorldM = anchor.transformMatrix(relativeTo: nil)
+            let menuEvent = menu.update(
+              primaryDown: primary,
+              drawDown: rawDraw && !viewOnly,
+              tipWorld: SIMD3<Float>(tipWorldM.columns.3.x, tipWorldM.columns.3.y, tipWorldM.columns.3.z),
+              now: Date().timeIntervalSinceReferenceDate,
+              menuAllowed: menuMode == 0 || menuMode == 2 || menuMode == 3)
+            if menuEvent == .tap {
+              self.registerKnockTap()
+            }
+            else if menuEvent != .none {
+              self.refreshStatus()
+            }
+            /* Marking menu open: the tip only aims, it never sculpts. */
+            let drawDown = (viewOnly || menu.suppressesDrawing) ? false : rawDraw
             let drawPressure: Float = {
-              if viewOnly { return 0 }
+              if viewOnly || menu.suppressesDrawing { return 0 }
               if secP > 0.001 { return secP }
               if tipSensorP > 0.001 { return tipSensorP }
               return self.tipPressure
@@ -673,6 +651,19 @@ import simd
           try? await Task.sleep(nanoseconds: 11_111_111)
         }
       }
+    }
+
+    /** Short primary tap near the mesh counts toward a knock (far taps do nothing). */
+    private func registerKnockTap() {
+      let near = BlenderImmersiveState.shared.museNearMeshDist
+      let radius = max(BlenderImmersiveState.shared.handMenuRadius, 0.05)
+      let farGate = max(0.12, radius * 2.0)
+      guard near.isFinite, near < farGate else { return }
+      knockTapCount = min(knockTapCount + 1, 3)
+      knockDeadline = Date().addingTimeInterval(knockWindowSeconds)
+      let msg = "muse knock tap=\(knockTapCount) (window \(knockWindowSeconds)s) near=\(near)"
+      print("[immersive] \(msg)")
+      BlenderIOSDiagnosticLog.bootSwiftOnly(msg)
     }
 
     private func logTipTransitionIfNeeded(pressed: Bool, pressure: Float, source: String) {

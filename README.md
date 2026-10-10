@@ -22,7 +22,7 @@ Status
 |---|---|
 | Track | **Blender 5.0 line** (marketing `5.0.1`) |
 | Branch | **`immersive-space`** (remote `visionpro` → [HoloMoto/Blender_for_AppleVisionPro](https://github.com/HoloMoto/Blender_for_AppleVisionPro)) |
-| Latest TestFlight (Vision Pro) | **160** — Immersive stability: fixes scene jitter from TF-159 (window pinch-drags no longer move the Immersive scene; two-hand hold reworked, off by default), planar pan off in Immersive, origin reset; includes 159 spatial sculpt, 158 touch navigation, 157 Preferences persistence |
+| Latest TestFlight (Vision Pro) | **161** — Muse brush marking menu: opens at the pen tip only after holding the select button (5 s default, adjustable), pick by pointing the tip and releasing, Voxel Remesh coarse/medium/fine in the menu; includes 160 Immersive stability (no jitter, pan off in Immersive, origin reset), 159 spatial sculpt, 158 touch navigation, 157 Preferences persistence |
 | 5.3 line | Paused (`immersive-space-53`). Not shipped until it launches as reliably as 5.0 |
 
 Experimental. Usable for development and testing on device; not a release build.
@@ -45,8 +45,11 @@ Features (visionOS)
 
 **Input**
 
-- **Logitech Muse** spatial pen: pressure sculpting, near-mesh brush switching,
-  far-from-mesh secondary button opens a **brush pie menu**
+- **Logitech Muse** spatial pen: pressure sculpting; quick taps of the select button near the
+  mesh switch brushes (knock); **holding the select button for 5 s** (adjustable, Hand Menu /
+  N-panel) opens a **marking menu at the pen tip** — point the tip toward a brush and release
+  to pick it, release in the center to cancel — the outer ring also has **Voxel Remesh** coarse / medium / fine
+  (voxel = object diagonal ÷ 48 / 96 / 192, density-guarded, one undo step)
 - **Spatial sculpt**: the pen tip and its aim drive Blender's own sculpt stroke in 3D
   (brush assets Draw, Clay Strips, Grab, Smooth, Inflate/Deflate, Mask, Crease, Layer,
   Snake Hook, Draw Sharp, Flatten; symmetry, auto-masking, one undo step per stroke),

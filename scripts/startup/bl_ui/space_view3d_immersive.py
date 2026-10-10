@@ -107,7 +107,59 @@ def _update_muse_knock_triple(self, context):
     bpy.ops.wm.ios_immersive_set_muse_knock_brush(knock=3, kind=int(self.muse_knock_triple))
 
 
+_MUSE_MENU_HOLD_DEFAULT = 5.0
+
+
+_muse_menu_hold_cache = []
+
+
+def _muse_menu_hold_lib():
+    if _muse_menu_hold_cache:
+        return _muse_menu_hold_cache[0]
+    lib = None
+    try:
+        import ctypes
+
+        lib = ctypes.CDLL(None)
+        lib.WM_IOS_immersive_get_muse_menu_hold.restype = ctypes.c_float
+        lib.WM_IOS_immersive_get_muse_menu_hold.argtypes = []
+        lib.WM_IOS_immersive_set_muse_menu_hold.restype = None
+        lib.WM_IOS_immersive_set_muse_menu_hold.argtypes = [ctypes.c_float]
+    except (OSError, AttributeError):
+        lib = None
+    _muse_menu_hold_cache.append(lib)
+    return lib
+
+
+def _get_muse_menu_hold(_self):
+    lib = _muse_menu_hold_lib()
+    if lib is None:
+        return _MUSE_MENU_HOLD_DEFAULT
+    return float(lib.WM_IOS_immersive_get_muse_menu_hold())
+
+
+def _set_muse_menu_hold(_self, value):
+    lib = _muse_menu_hold_lib()
+    if lib is not None:
+        lib.WM_IOS_immersive_set_muse_menu_hold(float(value))
+
+
 class ImmersiveOptions(PropertyGroup):
+    muse_menu_hold_seconds: FloatProperty(
+        name="メニュー長押し",
+        description=(
+            "Muse の選択ボタン（筆圧ではないボタン）をこの秒数押し続けるとペン先にブラシメニューが出る。"
+            "押したままペン先を向けて離すと決定、中心で離すとキャンセル"
+        ),
+        default=_MUSE_MENU_HOLD_DEFAULT,
+        min=0.5,
+        max=10.0,
+        step=50,
+        precision=1,
+        subtype='TIME_ABSOLUTE',
+        get=_get_muse_menu_hold,
+        set=_set_muse_menu_hold,
+    )
     use_hand_as_pen: BoolProperty(
         name="手をペン代わりに",
         description="Immersive で右手の人差し指＋ピンチを Muse の代わりに使う",
@@ -326,6 +378,11 @@ class ImmersivePanelBase:
         help_col.label(text="ON: 右手の甲=ブラシ位置")
         help_col.label(text="発火: ピンチ / 近接 を切替")
         help_col.label(text="OFF: Logitech Muse")
+        box.prop(opts, "muse_menu_hold_seconds", text="ブラシメニュー長押し (秒)")
+        hold_col = box.column(align=True)
+        hold_col.scale_y = 0.85
+        hold_col.label(text="選択ボタン長押し→ペン先にメニュー")
+        hold_col.label(text="向けて離す=決定 / 中心で離す=キャンセル")
 
         box = layout.box()
         box.label(text="空間シーン同期", icon='FILE_REFRESH')
@@ -358,7 +415,7 @@ class ImmersivePanelBase:
             knock.prop(opts, "muse_knock_triple", text="トリプル")
             hint = knock.column(align=True)
             hint.scale_y = 0.85
-            hint.label(text="筆圧ボタン以外を連続ノック")
+            hint.label(text="選択ボタンを短く(0.3秒未満)連続ノック")
             hint.label(text="判定窓 0.35秒 / 既定: +/−/Mask")
 
 

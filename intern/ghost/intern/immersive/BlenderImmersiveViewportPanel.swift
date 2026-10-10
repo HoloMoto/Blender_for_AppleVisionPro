@@ -285,7 +285,7 @@ import UIKit
         in: 0.02...0.80,
         step: 0.02)
 
-      Button("リメッシュ（DualCon）") { WM_IOS_immersive_hand_menu_remesh() }
+      Button("リメッシュ（Voxel）") { WM_IOS_immersive_hand_menu_remesh() }
         .buttonStyle(.borderedProminent)
         .tint(.blue.opacity(0.9))
         .frame(maxWidth: .infinity, minHeight: 40)

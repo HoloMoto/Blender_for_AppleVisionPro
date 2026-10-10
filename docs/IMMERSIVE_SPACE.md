@@ -105,7 +105,28 @@ The Muse tip (or the hand pen) drives Blender's own sculpt stroke system in 3D:
   desktop build. Direction falls back from pen aim → viewer→tip → region view.
 - Spacing is world-space (brush spacing % × radius, ≤ 8 sub-steps per sample);
   grab-like / anchored brushes take one step per sample.
-- Pie / knock brushes map to real assets: Draw, Clay Strips, Grab, Smooth, Inflate/Deflate
+- Muse brush marking menu (TF-161, `BlenderImmersiveMuseMarkingMenu`): hold the select
+  (primary) button still for `WM_IOS_immersive_get_muse_menu_hold()` seconds (default 5 s,
+  0.5–10 s; Hand Menu stepper / N-panel 入力 → ブラシメニュー長押し). A progress ring grows at the
+  tip from 0.4 s; at the threshold the menu opens anchored at the tip (3 cm above, 2 cm behind it,
+  billboarded to the wearer, so the pen / right hand stay below and in front). While still
+  holding, the tip displacement on the menu plane picks one of 8 compass directions
+  (±6° hysteresis); 2–7 cm = inner ring (Draw, Clay, Smooth, Inflate+, Grab, Inflate−, Mask,
+  Flatten), beyond 7 cm = outer ring along the same direction (up→clockwise: Draw Sharp, Layer,
+  Crease, Remesh 粗, Remesh 中, Remesh 細, Snake Hook, Dyntopo). Release selects; release
+  within 2 cm cancels. 8 directions keep marking-menu accuracy; the second ring adds depth
+  instead of narrower wedges. Remesh (lower outer arc, one deliberate reach past the inner ring)
+  runs Blender's Voxel Remesh (`OBJECT_OT_voxel_remesh`) on the active mesh with voxel size =
+  object bounding-box diagonal ÷ 48 / 96 / 192 (coarse / medium / fine), written to the mesh's
+  Voxel Size. A density guard raises the voxel size so the estimated result stays ≤ 200k faces
+  (surface area ÷ voxel²) and the grid ≤ 1.5e8 cells, and reports a warning. Dyntopo is turned
+  off first and stays off (re-enable from the menu); sculpt mode is kept; one undo step restores
+  the previous mesh; Live Mesh / USD are refreshed. The Hand Menu / N-panel リメッシュ button uses
+  the mesh's own Voxel Size with the same guard.
+  instead of narrower wedges. Strokes are suppressed while the menu is open; starting a stroke
+  during the hold cancels it. Taps shorter than 0.3 s near the mesh stay knock shortcuts;
+  longer presses released before the threshold do nothing.
+- Menu / knock brushes map to real assets: Draw, Clay Strips, Grab, Smooth, Inflate/Deflate
   (Deflate = invert stroke), Mask, Crease Polish, Layer, Snake Hook, Draw Sharp, Flatten/Contrast.
 - Hand Menu **Engine** toggle keeps the previous custom deform path (`legacy`).
 - Live Mesh: per-object cache; only changed vertex ranges are sent

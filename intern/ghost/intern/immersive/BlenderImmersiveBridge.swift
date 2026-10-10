@@ -438,7 +438,10 @@ public final class BlenderImmersiveBridge: NSObject {
       var text = "ok bound=0"
       let run = {
         MainActor.assumeIsolated {
-          text = BlenderImmersiveSpatialHold.shared.debug(action: action, a: a, b: b, c: c)
+          text =
+            action >= 20
+            ? BlenderImmersiveMuseMarkingMenu.shared.debug(action: action, a: a, b: b, c: c)
+            : BlenderImmersiveSpatialHold.shared.debug(action: action, a: a, b: b, c: c)
         }
       }
       if Thread.isMainThread {

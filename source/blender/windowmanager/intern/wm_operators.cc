@@ -13,6 +13,7 @@
 #include <cctype>
 #include <cerrno>
 #include <cfloat>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -4442,6 +4443,7 @@ struct WMIOSImmersiveHandMenuPending {
   float radius = 0.25f;
   bool pending_dismiss = false;
   bool pending_remesh = false;
+  int remesh_preset = -1; /* -1 mesh voxel size, 0 coarse, 1 medium, 2 fine */
   bool pending_dyntopo = false;
   int dyntopo = 1;
   bool pending_anim_key = false;
@@ -4787,6 +4789,22 @@ extern "C" void WM_IOS_immersive_muse_set_knock_brush(const int knock_count, con
   fflush(stderr);
 }
 
+static std::atomic<float> g_wm_ios_muse_menu_hold_s{5.0f};
+
+/** Seconds the Muse primary button must be held before the brush marking menu opens. */
+extern "C" void WM_IOS_immersive_set_muse_menu_hold(const float seconds)
+{
+  if (!std::isfinite(seconds)) {
+    return;
+  }
+  g_wm_ios_muse_menu_hold_s.store(std::clamp(seconds, 0.5f, 10.0f));
+}
+
+extern "C" float WM_IOS_immersive_get_muse_menu_hold(void)
+{
+  return g_wm_ios_muse_menu_hold_s.load();
+}
+
 /** Fire a completed primary-button knock sequence (1=single, 2=double, 3=triple). */
 extern "C" void WM_IOS_immersive_muse_knock(const int count)
 {
@@ -4825,6 +4843,13 @@ extern "C" void WM_IOS_immersive_hand_menu_dismiss()
 extern "C" void WM_IOS_immersive_hand_menu_remesh()
 {
   std::lock_guard lock(g_wm_ios_hand_menu_cmd.mutex);
+  g_wm_ios_hand_menu_cmd.pending_remesh = true;
+}
+
+extern "C" void WM_IOS_immersive_hand_menu_remesh_preset(const int preset)
+{
+  std::lock_guard lock(g_wm_ios_hand_menu_cmd.mutex);
+  g_wm_ios_hand_menu_cmd.remesh_preset = std::clamp(preset, -1, 2);
   g_wm_ios_hand_menu_cmd.pending_remesh = true;
 }
 
@@ -5202,6 +5227,74 @@ static void wm_ios_dualcon_add_quad(void *output_v, const int vert_indices[4])
     mesh->corner_verts_for_write()[output->curface * 4 + i] = vert_indices[i];
   }
   output->curface++;
+}
+
+static constexpr int WMIOS_REMESH_MAX_FACES = 200000;
+static constexpr double WMIOS_REMESH_MAX_CELLS = 1.5e8;
+
+struct WMIOSRemeshReport {
+  int preset = -1;
+  float requested = 0.0f;
+  float voxel = 0.0f;
+  bool guard = false;
+  int faces_before = 0;
+  int faces_after = 0;
+  int count = 0;
+  char method[16] = "none";
+};
+static WMIOSRemeshReport g_wm_ios_remesh_last;
+
+/** Voxel size for Muse remesh: preset 0/1/2 = diagonal / 48, 96, 192; -1 = the mesh's own
+ * Voxel Size (diagonal / 48 when unset or larger than half the diagonal). Raised when the
+ * estimated result would exceed #WMIOS_REMESH_MAX_FACES quads or the grid #WMIOS_REMESH_MAX_CELLS. */
+static float wm_ios_immersive_remesh_voxel(const Mesh &mesh,
+                                           const int preset,
+                                           bool &r_guard,
+                                           float &r_requested)
+{
+  using namespace blender;
+  r_guard = false;
+  const std::optional<Bounds<float3>> bounds = mesh.bounds_min_max();
+  if (!bounds) {
+    r_requested = mesh.remesh_voxel_size > 0.0f ? mesh.remesh_voxel_size : 0.05f;
+    return r_requested;
+  }
+  const float3 dims = math::max(bounds->max - bounds->min, float3(1e-4f));
+  const float diag = math::length(dims);
+  float voxel;
+  if (preset >= 0 && preset <= 2) {
+    const float divisions[3] = {48.0f, 96.0f, 192.0f};
+    voxel = diag / divisions[preset];
+  }
+  else {
+    voxel = mesh.remesh_voxel_size;
+    if (voxel <= 0.0f || voxel > diag * 0.5f) {
+      voxel = diag / 48.0f;
+    }
+  }
+  r_requested = voxel;
+
+  const Span<float3> positions = mesh.vert_positions();
+  const Span<int> corner_verts = mesh.corner_verts();
+  double area = 0.0;
+  for (const int3 &tri : mesh.corner_tris()) {
+    const float3 &a = positions[corner_verts[tri[0]]];
+    const float3 &b = positions[corner_verts[tri[1]]];
+    const float3 &c = positions[corner_verts[tri[2]]];
+    area += 0.5 * double(math::length(math::cross(b - a, c - a)));
+  }
+  /* Voxel remesh yields ≈ 1.5 quads per voxel² of surface. */
+  const double faces_per_area = 1.5;
+  if (area > 0.0 && faces_per_area * area / (double(voxel) * voxel) > WMIOS_REMESH_MAX_FACES) {
+    voxel = float(std::sqrt(faces_per_area * area / WMIOS_REMESH_MAX_FACES));
+    r_guard = true;
+  }
+  const double volume = double(dims.x) * dims.y * dims.z;
+  if (volume / (double(voxel) * voxel * voxel) > WMIOS_REMESH_MAX_CELLS) {
+    voxel = float(std::cbrt(volume / WMIOS_REMESH_MAX_CELLS));
+    r_guard = true;
+  }
+  return std::max(voxel, 1e-4f);
 }
 
 /** OpenVDB-free remesh (same engine as Remesh modifier Smooth / Mass Point). */
@@ -6644,6 +6737,7 @@ static void wm_ios_immersive_apply_hand_menu(bContext *C)
   float radius = 0.25f;
   bool pending_dismiss = false;
   bool pending_remesh = false;
+  int remesh_preset = -1;
   bool pending_dyntopo = false;
   int dyntopo = 1;
   bool pending_anim_key = false;
@@ -6672,6 +6766,8 @@ static void wm_ios_immersive_apply_hand_menu(bContext *C)
     radius = g_wm_ios_hand_menu_cmd.radius;
     pending_dismiss = g_wm_ios_hand_menu_cmd.pending_dismiss;
     pending_remesh = g_wm_ios_hand_menu_cmd.pending_remesh;
+    remesh_preset = g_wm_ios_hand_menu_cmd.remesh_preset;
+    g_wm_ios_hand_menu_cmd.remesh_preset = -1;
     pending_dyntopo = g_wm_ios_hand_menu_cmd.pending_dyntopo;
     dyntopo = g_wm_ios_hand_menu_cmd.dyntopo;
     pending_anim_key = g_wm_ios_hand_menu_cmd.pending_anim_key;
@@ -6879,9 +6975,12 @@ static void wm_ios_immersive_apply_hand_menu(bContext *C)
     /* Entering Sculpt from VPaint/Object must re-bind the Muse brush tool, otherwise
      * the previous Vertex Paint session can leave sculpt looking inert. */
     if (mode == 2) {
+      /* A brush picked together with the mode switch (Muse marking menu from Object) wins. */
+      if (!pending_brush) {
+        brush_kind = g_wm_ios_muse_brush_kind;
+        STRNCPY(brush_tool_id, wm_ios_muse_tool_id_for_kind(brush_kind));
+      }
       pending_brush = true;
-      brush_kind = g_wm_ios_muse_brush_kind;
-      STRNCPY(brush_tool_id, wm_ios_muse_tool_id_for_kind(brush_kind));
       wm_ios_immersive_muse_apply_dyntopo(C, ob, g_wm_ios_muse_dyntopo_wanted);
     }
   }
@@ -6989,10 +7088,16 @@ static void wm_ios_immersive_apply_hand_menu(bContext *C)
                      static_cast<Mesh *>(ob_remesh->data) :
                      nullptr;
         }
-        const bool restore_dyntopo = g_wm_ios_muse_dyntopo_wanted && was_sculpt;
         if (ob_remesh != nullptr && BKE_object_sculpt_use_dyntopo(ob_remesh)) {
           wm_ios_immersive_muse_apply_dyntopo(C, ob_remesh, false);
           mesh = static_cast<Mesh *>(ob_remesh->data);
+        }
+        /* Voxel remesh and dyntopo are alternatives (Blender refuses to remesh with dyntopo);
+         * keep it off afterwards so one undo restores the pre-remesh geometry. */
+        if (was_sculpt) {
+          g_wm_ios_muse_dyntopo_wanted = false;
+          std::lock_guard lock(g_wm_ios_hand_menu_cmd.mutex);
+          g_wm_ios_hand_menu_cmd.dyntopo = 0;
         }
         if (mesh == nullptr || mesh->faces_num <= 0) {
           fprintf(stderr, "[immersive] remesh aborted: empty mesh\n");
@@ -7000,27 +7105,53 @@ static void wm_ios_immersive_apply_hand_menu(bContext *C)
           GHOST_IOS_diag_log("remesh: aborted empty mesh");
         }
         else {
-          Mesh *new_mesh = nullptr;
+          WMIOSRemeshReport rep;
+          rep.preset = remesh_preset;
+          rep.faces_before = mesh->faces_num;
+          const float voxel = wm_ios_immersive_remesh_voxel(
+              *mesh, remesh_preset, rep.guard, rep.requested);
+          rep.voxel = voxel;
+          mesh->remesh_voxel_size = voxel;
+          if (rep.guard) {
+            char gbuf[160];
+            SNPRINTF(gbuf,
+                     "remesh: density guard voxel %.4f -> %.4f (max %d faces)",
+                     rep.requested,
+                     voxel,
+                     WMIOS_REMESH_MAX_FACES);
+            fprintf(stderr, "[immersive] %s\n", gbuf);
+            fflush(stderr);
+            GHOST_IOS_diag_log(gbuf);
+            WM_global_reportf(RPT_WARNING,
+                              "Remesh: voxel size raised %.4f -> %.4f to stay under %d faces",
+                              rep.requested,
+                              voxel,
+                              WMIOS_REMESH_MAX_FACES);
+          }
+          bool remeshed = false;
+          bool needs_undo_push = false;
           const char *method = "none";
 #ifdef WITH_OPENVDB
-          if (const std::optional<blender::Bounds<blender::float3>> bounds = mesh->bounds_min_max())
           {
-            const float diag = len_v3v3(&bounds->min.x, &bounds->max.x);
-            if (mesh->remesh_voxel_size <= 0.0f || mesh->remesh_voxel_size > diag * 0.5f) {
-              mesh->remesh_voxel_size = std::clamp(diag / 48.0f, 0.008f, 0.12f);
+            const wmOperatorStatus st = WM_operator_name_call(
+                C,
+                "OBJECT_OT_voxel_remesh",
+                blender::wm::OpCallContext::ExecDefault,
+                nullptr,
+                nullptr);
+            if (st & OPERATOR_FINISHED) {
+              remeshed = true;
+              method = "voxel";
             }
           }
-          else if (mesh->remesh_voxel_size <= 0.0f) {
-            mesh->remesh_voxel_size = 0.05f;
-          }
-          new_mesh = BKE_mesh_remesh_voxel(
-              mesh, mesh->remesh_voxel_size, mesh->remesh_voxel_adaptivity, 0.0f, nullptr);
-          if (new_mesh) {
-            method = "voxel";
-          }
+          ob_remesh = CTX_data_active_object(C);
+          mesh = (ob_remesh && ob_remesh->type == OB_MESH) ?
+                     static_cast<Mesh *>(ob_remesh->data) :
+                     nullptr;
 #endif
+          Mesh *new_mesh = nullptr;
 #if defined(WITH_MOD_REMESH)
-          if (new_mesh == nullptr) {
+          if (!remeshed && mesh != nullptr) {
             new_mesh = wm_ios_immersive_dualcon_remesh(mesh);
             if (new_mesh) {
               method = "dualcon";
@@ -7028,8 +7159,8 @@ static void wm_ios_immersive_apply_hand_menu(bContext *C)
           }
 #endif
 #ifdef WITH_QUADRIFLOW
-          if (new_mesh == nullptr) {
-            const int target = std::max(mesh->faces_num, 500);
+          if (!remeshed && new_mesh == nullptr && mesh != nullptr) {
+            const int target = std::clamp(mesh->faces_num, 500, WMIOS_REMESH_MAX_FACES);
             new_mesh = BKE_mesh_remesh_quadriflow(
                 mesh, target, 1, false, true, false, nullptr, nullptr);
             if (new_mesh) {
@@ -7037,36 +7168,59 @@ static void wm_ios_immersive_apply_hand_menu(bContext *C)
             }
           }
 #endif
-          if (new_mesh != nullptr) {
+          if (!remeshed && new_mesh != nullptr) {
             blender::bke::mesh_remesh_reproject_attributes(*mesh, *new_mesh);
             BKE_mesh_nomain_to_mesh(new_mesh, mesh, ob_remesh);
             if (ob_remesh->mode == OB_MODE_SCULPT) {
               BKE_sculptsession_free_pbvh(*ob_remesh);
             }
+            remeshed = true;
+            needs_undo_push = true;
+          }
+          if (remeshed && mesh != nullptr) {
             BKE_mesh_batch_cache_dirty_tag(mesh, BKE_MESH_BATCH_DIRTY_ALL);
             DEG_id_tag_update(&mesh->id, ID_RECALC_GEOMETRY);
             DEG_id_tag_update(&ob_remesh->id, ID_RECALC_GEOMETRY);
             WM_event_add_notifier(C, NC_GEOM | ND_DATA, mesh);
             WM_event_add_notifier(C, NC_OBJECT | ND_DRAW, ob_remesh);
-            if (restore_dyntopo) {
-              mesh->flag |= ME_SCULPT_DYNAMIC_TOPOLOGY;
-              wm_ios_immersive_muse_apply_dyntopo(C, ob_remesh, true);
-            }
             g_wm_ios_muse_geometry_dirty = true;
-            ED_undo_push(C, "Muse Remesh");
+            if (needs_undo_push) {
+              ED_undo_push(C, "Muse Remesh");
+            }
             /* Force Immersive USD refresh in Object/Sculpt (not Edit) so BM load
-             * cannot overwrite DualCon result. */
+             * cannot overwrite the remesh result. */
             wm_ios_immersive_reload_usdz(C, CTX_data_active_object(C), "remesh");
             if (was_edit) {
               blender::ed::object::mode_set(C, OB_MODE_EDIT);
             }
-            char buf[96];
-            SNPRINTF(buf, "remesh: OK (%s) faces=%d", method, mesh->faces_num);
+            rep.faces_after = mesh->faces_num;
+            STRNCPY(rep.method, method);
+            rep.count = g_wm_ios_remesh_last.count + 1;
+            g_wm_ios_remesh_last = rep;
+            char buf[160];
+            SNPRINTF(buf,
+                     "remesh: OK (%s) preset=%d voxel=%.4f guard=%d faces=%d->%d",
+                     method,
+                     rep.preset,
+                     rep.voxel,
+                     int(rep.guard),
+                     rep.faces_before,
+                     rep.faces_after);
             fprintf(stderr, "[immersive] %s\n", buf);
             fflush(stderr);
             GHOST_IOS_diag_log(buf);
           }
           else {
+            if (new_mesh != nullptr) {
+              BKE_id_free(nullptr, new_mesh);
+            }
+            rep.faces_after = rep.faces_before;
+            STRNCPY(rep.method, "failed");
+            rep.count = g_wm_ios_remesh_last.count + 1;
+            g_wm_ios_remesh_last = rep;
+            if (was_edit) {
+              blender::ed::object::mode_set(C, OB_MODE_EDIT);
+            }
             fprintf(stderr, "[immersive] remesh FAILED (no OpenVDB/DualCon/Quadriflow result)\n");
             fflush(stderr);
             GHOST_IOS_diag_log("remesh: FAILED");
@@ -11341,7 +11495,10 @@ extern "C" const char *WM_IOS_immersive_debug_stats(void)
            "\"live_ms\":%.4f,\"live_full\":%d,\"live_partial\":%d,\"live_fallback\":%d,"
            "\"live_ranges\":%d,\"live_verts\":%d,\"preview_published\":%d,"
            "\"preview_visible\":%d,\"preview\":[%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f],"
-           "\"radius_world\":%.5f,\"view_scale\":%.4f,\"brush_kind\":%d,\"geometry_dirty\":%d}",
+           "\"radius_world\":%.5f,\"view_scale\":%.4f,\"brush_kind\":%d,\"geometry_dirty\":%d,"
+           "\"dyntopo_wanted\":%d,\"remesh_count\":%d,\"remesh_preset\":%d,"
+           "\"remesh_requested\":%.5f,\"remesh_voxel\":%.5f,\"remesh_guard\":%d,"
+           "\"remesh_faces_before\":%d,\"remesh_faces_after\":%d,\"remesh_method\":\"%s\"}",
            g_wm_ios_sculpt_engine,
            int(blender::ed::sculpt_paint::spatial::stroke_active()),
            st.samples,
@@ -11375,7 +11532,16 @@ extern "C" const char *WM_IOS_immersive_debug_stats(void)
            wm_ios_spatial_radius_world(),
            g_wm_ios_view_scale,
            g_wm_ios_muse_brush_kind,
-           int(g_wm_ios_muse_geometry_dirty));
+           int(g_wm_ios_muse_geometry_dirty),
+           int(g_wm_ios_muse_dyntopo_wanted),
+           g_wm_ios_remesh_last.count,
+           g_wm_ios_remesh_last.preset,
+           g_wm_ios_remesh_last.requested,
+           g_wm_ios_remesh_last.voxel,
+           int(g_wm_ios_remesh_last.guard),
+           g_wm_ios_remesh_last.faces_before,
+           g_wm_ios_remesh_last.faces_after,
+           g_wm_ios_remesh_last.method);
   return buf;
 }
 
